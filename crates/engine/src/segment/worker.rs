@@ -50,6 +50,8 @@ pub struct Job {
     pub dir: PathBuf,
     /// Which photo and look the request is about (the encode cache's key).
     pub key: u64,
+    /// Identity of the full photo input, including for a detail job whose encode-cache key is zero.
+    pub source_key: u64,
     /// Renders the model input when the cache doesn't hold `key` (always for a detail pass).
     pub render: Option<RenderJob>,
     /// The photo's file, when it is missing on disk (for a clearer error if rendering fails).
@@ -62,6 +64,7 @@ pub struct Job {
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
 pub struct Outcome {
     pub tag: Tag,
+    pub source_key: u64,
     pub result: Result<Option<SegMask>, String>,
     /// A newer request for the same selection came in; this one was skipped.
     pub superseded: bool,
@@ -219,7 +222,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true });
+            let _ = job.reply.send(Outcome { tag: job.tag, source_key: job.source_key, result: Ok(None), superseded: true });
             continue;
         }
         let result = match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(&mut state, shared, &mut job))) {
@@ -237,7 +240,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         }
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false });
+        let _ = job.reply.send(Outcome { tag: job.tag, source_key: job.source_key, result, superseded: false });
     }
 }
 
@@ -405,7 +408,7 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+        Job { dir, key: 1, source_key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
     }
 
     #[test]

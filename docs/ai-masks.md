@@ -241,3 +241,17 @@ python3 -m venv .venv-sam3 && .venv-sam3/bin/pip install -r tools/requirements-s
 .venv-sam3/bin/python tools/sam3_reference.py photo.jpg ref.safetensors
 LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=ref.safetensors cargo test -p lightcraft-segment --release -- --nocapture
 ```
+
+## Selection provenance and late results
+
+Sky, Subject, Background and People still use a file's semantic mattes when available,
+otherwise classical approximate selection. The Masking panel explicitly identifies that
+approximation and suggests Brush refinement or Object / Describe. It is not equivalent to
+SAM inference; this label does not improve the heuristic's segmentation quality.
+
+A background Object / Describe / Detail result is now tied to the rendered input that
+produced it. Changing the photo's look, geometry, orientation, reloaded lens coefficients,
+or camera profile while inference runs causes the old result to be discarded with a retry
+notice. An unchanged result is accepted normally. Detail jobs carry the full-photo input
+identity separately from their temporary encode-cache key. Regression tests inject stored
+segmentations without downloading weights or running inference.

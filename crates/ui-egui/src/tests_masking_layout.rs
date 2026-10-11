@@ -90,3 +90,18 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
         }
     }
 }
+
+#[test]
+fn approximate_selection_notice_is_visible_and_wraps_inside_the_panel() {
+    let source = "Automatic selection is approximate. Refine with Brush or use Object / Describe.";
+    for locale in [Locale::En, Locale::De, Locale::PtBr] {
+        for width in [250.0, 270.0, 520.0] {
+            for scale in [1.0, 2.0] {
+                let (texts, _) = panel(width, scale, locale, false);
+                let notice = texts.iter().find(|t| t.galley.job.text == locale.tr(source)).expect("approximation notice must be visible");
+                assert!(!notice.galley.elided, "the refinement suggestion must remain readable");
+                assert!(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 1600.0)).contains_rect(notice.visual_bounding_rect()));
+            }
+        }
+    }
+}
