@@ -129,6 +129,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 register(ui.ctx(), format!("maskNewLabel:{kind}"), Rect::from_min_size(at, g.size()));
                 ui.painter().galley(at, g, t.text_dim);
                 let resp = if elided { resp.on_hover_text(label) } else { resp };
+                let resp = if *kind == "sky" {
+                    resp.on_hover_text(crate::i18n::tr(
+                        "Select the sky with SAM 3 when installed; otherwise use an approximate selection or the photo's sky matte.",
+                    ))
+                } else {
+                    resp
+                };
                 if resp.clicked() {
                     match *kind {
                         "colorRange" => {

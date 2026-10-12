@@ -805,6 +805,27 @@ mod tests {
         assert!(matches!(&s.develop_of(photo).unwrap().masks[0].components[0].shape,MaskShape::Prompt { detail,.. } if detail.is_empty()));
     }
 
+    #[cfg(feature = "sam")]
+    #[test]
+    fn sky_prompt_no_match_and_failure_leave_existing_masks_unchanged() {
+        for result in [Ok(None), Err("model inference failed".to_string())] {
+            let mut s = Session::with_demo();
+            let photo = s.active().unwrap();
+            s.execute("mask.add", &serde_json::json!({"kind":"radial"})).unwrap();
+            let before = s.develop_of(photo).unwrap();
+            let outcome = worker::Outcome {
+                source_key: s.segment_key(photo).unwrap().0,
+                tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: Some("Sky".into()), text: "sky".into() },
+                result,
+                superseded: false,
+            };
+            let mut polled = Polled::default();
+            s.apply_outcome(outcome, &mut polled);
+            assert!(!polled.changed && !polled.messages.is_empty());
+            assert_eq!(*s.develop_of(photo).unwrap(), *before);
+        }
+    }
+
     #[test]
     fn detail_region_frames_the_selection_with_a_margin() {
         // a small object in the middle of a square photo

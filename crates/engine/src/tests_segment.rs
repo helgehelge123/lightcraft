@@ -305,3 +305,63 @@ fn a_missing_model_is_model_missing_by_kind() {
         }
     }
 }
+
+#[test]
+fn sky_without_a_model_keeps_legacy_masks_and_accepts_stored_model_results() {
+    use lightcraft_develop::{MaskShape, SegMask};
+    let mut s = Session::with_demo();
+    s.segmenter.dir = Some(tmp("sky-no-model"));
+    s.execute("mask.add", &json!({"kind":"sky", "ai":false})).unwrap();
+    let id = s.active().unwrap();
+    let legacy = s.develop_of(id).unwrap();
+    assert!(matches!(legacy.masks[0].components[0].shape, MaskShape::Sky));
+    let saved = serde_json::to_string(&*legacy).unwrap();
+    let reopened: lightcraft_develop::DevelopSettings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(reopened, *legacy);
+    let seg = SegMask::from_logits(2, &[8.0, 8.0, -8.0, -8.0]);
+    s.execute("mask.add", &json!({"kind":"sky", "seg":seg})).unwrap();
+    let d = s.develop_of(id).unwrap();
+    assert_eq!(d.masks[1].name, "Sky");
+    assert!(matches!(&d.masks[1].components[0].shape, MaskShape::Prompt { text, seg:Some(_), .. } if text == "sky"));
+    let saved = serde_json::to_string(&*d).unwrap();
+    let reopened: lightcraft_develop::DevelopSettings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(reopened, *d, "model result survives without weights");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().masks.len(), 1);
+    assert!(s.execute("mask.add", &json!({"kind":"sky", "ai":"yes"})).is_err());
+    assert!(s.execute("mask.add", &json!({"kind":"sky", "seg":17})).is_err());
+    assert!(s.execute("mask.add", &json!({"kind":"sky", "seg":{"side":2,"data":"broken"}})).is_err());
+    assert!(s.execute("mask.add", &json!({"kind":"sky", "ai":true})).is_err());
+    assert_eq!(s.develop_of(id).unwrap().masks.len(), 1, "failure adds no empty mask");
+}
+
+#[test]
+fn sky_components_keep_the_requested_operation() {
+    use lightcraft_develop::{MaskOp, MaskShape, SegMask};
+    let mut s = Session::with_demo();
+    s.execute("mask.add", &json!({"kind":"radial"})).unwrap();
+    let seg = SegMask::from_logits(2, &[8.0, -8.0, 8.0, -8.0]);
+    for op in ["add", "subtract", "intersect"] {
+        s.execute("mask.addComponent", &json!({"kind":"sky", "op":op, "seg":seg})).unwrap();
+    }
+    let d = s.develop_of(s.active().unwrap()).unwrap();
+    for (c, op) in d.masks[0].components.iter().skip(1).zip([MaskOp::Add, MaskOp::Subtract, MaskOp::Intersect]) {
+        assert_eq!(c.op, op);
+        assert!(matches!(&c.shape, MaskShape::Prompt {text,seg:Some(_),..} if text == "sky"));
+    }
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn sky_with_installed_but_damaged_model_queues_then_reports_failure() {
+    let mut s = Session::with_demo();
+    s.segmenter.background = true;
+    let dir = damaged_model("sky-damaged");
+    s.segmenter.dir = Some(dir.clone());
+    let r = s.execute("mask.add", &json!({"kind":"sky"})).unwrap();
+    assert_eq!(r["pending"], true);
+    let messages = settle(&mut s, Duration::from_secs(30));
+    assert!(!messages.is_empty());
+    assert!(s.develop_of(s.active().unwrap()).unwrap().masks.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -1,4 +1,4 @@
-# AI masks (Object and Describe)
+# AI masks (Sky, Object and Describe)
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
@@ -14,6 +14,11 @@ In the Masking panel (M):
 
 - **Object**: click the thing you want; every click refines the selection. ⌥-click (Alt) a part
   to leave it out. Clicks show as green (include) and red (leave out) dots.
+- **Sky**: with SAM 3 installed (or a remote worker configured), selects `sky` through the same
+  background worker as Describe. No-match and model failures create no empty mask. Without a model,
+  Sky keeps the source-matte/approximate selection; the panel identifies approximations. Previously
+  saved Sky masks keep their rendering. New model results are stored as Describe shapes with the
+  fixed `sky` prompt, so reopening and exporting need no model.
 - **Describe**: type what to select — `sky`, `trees`, `the red car` — and press Return. Every
   instance the model finds (score above 0.5) joins the mask; if nothing matches, nothing is
   created and you are told so.
@@ -176,7 +181,22 @@ Therefore:
 - Whoever hosts a mirror redistributes the SAM Materials and must follow the licence (ship it
   next to the files).
 
+## Sky validation
+
+The Sky command is covered by model-free persistence/component tests and synthetic worker
+no-match/failure tests. A manual check on 2026-10-12 used the installed SAM 3 weights and the
+CC0 Sony A7R IVA sample `arw-sony-a7rm4a-compressed` from the corpus manifest: clicking Sky
+created a stored 288×288 segmentation. The overlay selected the sky above trees and rooftops;
+this is a smoke check, not a broad boundary-quality benchmark. Replaying that segmentation
+in a separate session with no model configured, with a −1 EV local exposure adjustment,
+produced a byte-identical 1200×800 CPU render. No image or model weights are bundled by this change.
+
 ## Commands (control channel, MCP)
+
+`mask.add {"kind":"sky"}` and `mask.addComponent {"kind":"sky","op":"subtract"}`
+use SAM 3 when configured. Set `ai: true` to require the model (missing weights are an error), or
+`ai: false` to explicitly keep the source-matte/heuristic path. A stored `seg` can be replayed
+with kind `sky` without weights. Subject and Background are unchanged.
 
 | Command | Params | |
 |---|---|---|
