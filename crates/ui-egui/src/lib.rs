@@ -1008,6 +1008,17 @@ impl LightcraftApp {
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
                 tex.insert(t.id(), crate::softpaint::CpuTexture::linear(px.clone()));
             }
+            // The offscreen context inherits native texture handles through egui memory.
+            // Supply CPU pixels for the candidate thumbnails, as for merge previews.
+            if let Some(photo) = self.session.segmenter.subjects.photo {
+                for (i, candidate) in self.session.segmenter.subjects.candidates.iter().enumerate() {
+                    let key = egui::Id::new(("subject-texture", photo.0, i, candidate.seg.data.clone()));
+                    if let Some(handle) = view.ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(candidate.size, &candidate.rgba);
+                        tex.insert(handle.id(), crate::softpaint::CpuTexture::linear(std::sync::Arc::new(image)));
+                    }
+                }
+            }
             view.paint(&tex)
         });
         self.shadow = Some(view);

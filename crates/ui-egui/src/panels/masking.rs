@@ -89,6 +89,7 @@ fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
+    subject_picker(app, ui.ctx(), id);
     header(ui, "Masking");
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
@@ -143,6 +144,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             let _ = app.run("mask.add", json!({"kind": "colorRange"}));
                             app.ui.tool = "colorRange".into();
                             app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
+                        }
+                        "subject" | "background" if std::env::var_os("LIGHTCRAFT_BLIP_DIR").is_some() => {
+                            let _ = app.run("mask.subject.discover", json!({"background": *kind == "background"}));
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
                         "prompt" => start_describe(app, "new"),
@@ -378,7 +382,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     egui::Popup::menu(&more).show(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 });
             });
-            range_controls(app, ui, i, &c.shape);
+            ui.push_id(("mask-component-controls", m.id, i), |ui| range_controls(app, ui, i, &c.shape));
         }
         ui.add_space(6.0);
         // wraps: the five actions are wider than a narrow panel
@@ -960,5 +964,108 @@ mod tests {
         assert_eq!(n, 2);
         assert!(w >= 24.0);
         assert_eq!(tile_layout(f32::NAN, long).0, 2);
+    }
+}
+
+/// Prototype candidate picker: thumbnails are actual SAM masks, never generated illustrations.
+fn subject_picker(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
+    let p = &app.session.segmenter.subjects;
+    if !p.open || p.photo != Some(id) {
+        return;
+    }
+    let busy = p.busy;
+    let background = p.background;
+    let error = p.error.clone();
+    let candidates = p.candidates.clone();
+    let mut open = true;
+    egui::Window::new(if background { "Choose subjects to exclude" } else { "Choose your subjects" })
+        .id(egui::Id::new("subject-picker"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(540.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.label(if background {
+                "Select the subjects to keep out of your background mask."
+            } else {
+                "Choose one or more objects to include in your mask."
+            });
+            ui.add_space(6.0);
+            if busy {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Finding subjects and checking their selections…");
+                });
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
+            if let Some(error) = &error {
+                ui.colored_label(egui::Color32::from_rgb(240, 180, 100), error);
+            }
+            egui::Grid::new("subject-cards").num_columns(3).spacing(vec2(12.0, 12.0)).show(ui, |ui| {
+                for (i, c) in candidates.iter().enumerate() {
+                    ui.vertical(|ui| {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(c.size, &c.rgba);
+                        let key = egui::Id::new(("subject-texture", id.0, i, c.seg.data.clone()));
+                        let texture = subject_texture(ctx, key, image);
+                        let r = ui.add(egui::Image::new(&texture).sense(Sense::click()));
+                        register(ctx, format!("subjectPreview:{i}"), r.rect);
+                        let mut selected = c.selected;
+                        let check = ui.checkbox(&mut selected, &c.label);
+                        register(ctx, format!("subjectCandidate:{i}"), check.rect);
+                        if r.clicked() {
+                            selected = !selected;
+                        }
+                        if selected != c.selected {
+                            let _ = app.run("mask.subject.choose", json!({"index": i, "selected": selected}));
+                        }
+                    });
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Red shows the selection. Suggestions can miss objects; Describe is still available.").small().weak());
+            ui.separator();
+            ui.horizontal(|ui| {
+                let cancel = ui.button("Cancel");
+                register(ctx, "subjectCancel", cancel.rect);
+                if cancel.clicked() {
+                    let _ = app.run("mask.subject.dismiss", json!({}));
+                }
+                let count = candidates.iter().filter(|c| c.selected).count();
+                let create = ui.add_enabled(!busy && count > 0 && error.is_none(), egui::Button::new(format!("Create mask ({count})")));
+                register(ctx, "subjectCreate", create.rect);
+                if create.clicked() {
+                    let _ = app.run("mask.subject.create", json!({}));
+                }
+            });
+        });
+    if !open {
+        let _ = app.run("mask.subject.dismiss", json!({}));
+    }
+}
+
+fn subject_texture(ctx: &egui::Context, key: egui::Id, image: egui::ColorImage) -> egui::TextureHandle {
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return texture;
+    }
+    // load_texture takes the context lock itself: never call it inside data_mut.
+    let texture = ctx.load_texture("subject-candidate", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+    texture
+}
+
+#[cfg(test)]
+mod subject_thumbnail_tests {
+    #[test]
+    fn subject_texture_does_not_reenter_the_context_lock() {
+        let ctx = egui::Context::default();
+        let key = egui::Id::new("candidate-test");
+        let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[255, 0, 0, 255]);
+        let first = super::subject_texture(&ctx, key, image.clone());
+        let second = super::subject_texture(&ctx, key, image);
+        assert_eq!(first.id(), second.id());
     }
 }

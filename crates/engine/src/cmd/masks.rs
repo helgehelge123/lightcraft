@@ -4,7 +4,7 @@ use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, Mas
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
+use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS, NO_PERSON, PeopleRequest, no_parts, people};
 use crate::{Result, Session};
 
@@ -340,6 +340,42 @@ fn find(masks: &mut [Mask], id: u32, c: &str) -> Result<usize> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "mask.subject.discover",
+            "Find Subject Candidates",
+            [],
+            None,
+            "{background?: bool} — experimental local BLIP/SAM picker",
+            has_active,
+            |s, p| {
+                s.subject_start(bool_or(p, "background", false)).map_err(ai_err)?;
+                Ok(json!({"pending": true}))
+            }
+        ),
+        cmd!(query "mask.subject.status", "Subject Candidates", [], None, "{} — transient candidate state", always, |s, _| {
+            s.subject_poll();
+            let p = &s.segmenter.subjects;
+            Ok(json!({"photo": p.photo, "busy": p.busy, "open": p.open, "error": p.error, "candidates": p.candidates}))
+        }),
+        cmd!("mask.subject.choose", "Choose Subject Candidate", [], None, "{index, selected: bool}", has_active, |s, p| {
+            if s.segmenter.subjects.photo != s.active() {
+                return Err(ai_err("The active photo changed."));
+            }
+            let index =
+                p.get("index").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).ok_or_else(|| ai_err("Invalid candidate index"))?;
+            let selected = p.get("selected").and_then(Value::as_bool).ok_or_else(|| ai_err("Give selected: true or false"))?;
+            let c = s.segmenter.subjects.candidates.get_mut(index).ok_or_else(|| ai_err("No such candidate"))?;
+            c.selected = selected;
+            Ok(json!({}))
+        }),
+        cmd!("mask.subject.create", "Create Subject Mask", [], None, "{} — combine chosen candidates in one undo step", has_active, |s, _| {
+            s.subject_create().map_err(ai_err)?;
+            Ok(json!({"activeMask": s.active_mask}))
+        }),
+        cmd!("mask.subject.dismiss", "Dismiss Subject Picker", [], None, "{} — close without changing masks", always, |s, _| {
+            s.segmenter.subjects.open = false;
+            Ok(json!({}))
+        }),
         cmd!(
             "mask.add",
             "Create New Mask",

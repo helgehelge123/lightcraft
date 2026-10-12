@@ -9,7 +9,8 @@
 //!
 //! The model sees the photo as developed, uncropped and without masks, at 1008 px — the frame
 //! mask coordinates live in — so a stored segmentation lines up with the photo at any size.
-//! Everything that touches the model (loading it, rendering and encoding the photo, clicks,
+//! The optional Subject prototype uses a separate bounded discovery worker (see [`subjects`]).
+//! Standard segmentation work (loading it, rendering and encoding the photo, clicks,
 //! descriptions, detail passes) runs on one worker thread ([`worker`]); the session talks to it
 //! over channels and never waits on a lock. With [`Segmenter::background`] (the desktop app)
 //! commands return at once and [`Session::segment_poll`] applies the results; without it (CLI,
@@ -18,6 +19,7 @@
 #[cfg(feature = "sam")]
 mod download;
 pub mod people;
+pub mod subjects;
 #[cfg(feature = "sam")]
 mod worker;
 
@@ -177,6 +179,7 @@ struct Settings {
 
 /// The model (on its worker thread), the download, and AI mask requests in flight.
 pub struct Segmenter {
+    pub subjects: subjects::Picker,
     /// Where the `facebook/sam3` files live (set by the app; `None`: no AI masks).
     pub dir: Option<PathBuf>,
     /// The user's list of download mirrors (one base URL per line), if any.
@@ -203,6 +206,7 @@ pub struct Segmenter {
 impl Default for Segmenter {
     fn default() -> Self {
         Segmenter {
+            subjects: subjects::Picker::default(),
             dir: None,
             mirrors_file: None,
             settings_file: None,
@@ -777,6 +781,7 @@ impl Session {
     /// Apply finished background requests (to masks that haven't changed since) and collect
     /// their messages. Cheap when nothing is pending: call it every frame.
     pub fn segment_poll(&mut self) -> Polled {
+        self.subject_poll();
         #[cfg_attr(not(feature = "sam"), allow(unused_mut))]
         let mut polled = Polled { messages: std::mem::take(&mut self.segmenter.messages), ..Default::default() };
         #[cfg(feature = "sam")]
