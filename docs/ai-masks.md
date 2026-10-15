@@ -410,19 +410,31 @@ revision `82a37760796d32b1411fe092ab5d4e227313294b` (BSD-3-Clause); no model is 
 by this prototype. Both BLIP and a local SAM 3 installation are required. Candle is pinned to
 0.9.2 with default features off; this adds no Python or C/C++ inference runtime.
 
-Subject runs a local caption on a background worker, extracts up to six phrases, then asks SAM
-for each. Unmatched phrases and near-identical masks are omitted. Red thumbnails show the actual
-selections. Choose one or more and press **Create mask**: the components are stored together in
-one undoable edit. Background uses the same picker and inverts the union. Cancel leaves edits
-untouched; computation already running finishes in the background. A changed photo cannot accept
-stale suggestions. Existing saved masks are unchanged, and Describe / Object remain available.
+Subject runs a local caption on a background thread, extracts up to six phrases, then asks SAM
+for each on the SAM 3 worker, with the photo it has encoded (an Object click or Describe on the
+same photo afterwards needs no second analysis, and no second copy of the model is loaded). A
+phrase that names people ("two women", "players", "a group of girls") becomes **each person on
+their own**: up to eight, ordered by how sharp they are (the 90th percentile of fine detail well
+inside them, so the player the camera focused on usually comes first), numbered *person 1, person
+2…*, and the sharpest is chosen already, so **Create mask** right away selects the subject in
+focus. A chosen person is stored as an Object selection with a click inside them, so + / − clicks
+and the detail pass refine that person alone. Other phrases select everything they name, as
+Describe does. Unmatched phrases and near-identical masks are omitted. Red thumbnails show the
+actual selections. Choose one or more and press **Create mask**: the components are stored
+together in one undoable edit. Background uses the same picker and inverts the union. Cancel leaves
+edits untouched; computation already running finishes in the background. A changed photo cannot
+accept stale suggestions. Existing saved masks are unchanged, and Describe / Object remain
+available. With a remote SAM 3 worker (`LIGHTCRAFT_SAM3_REMOTE`) the picker says it needs the
+local model.
 
-This is an evaluation interface, not a completed parity feature. The phrase extractor is simple,
-BLIP can omit objects or describe them incorrectly, and SAM groups all instances of a phrase
-(e.g. multiple people) rather than offering each instance separately. It does not identify every
-object. Verified candidates are reused when reopening the picker on the same unchanged photo.
-Model installation, cancellation during inference, per-instance selection and broader image
-coverage remain future work. No network is used during inference.
+This is an evaluation interface, not a completed parity feature. The phrase extractor is simple
+(a word list for people, counts and common verbs), BLIP can omit objects or describe them
+incorrectly, and sharpness is a fine-detail measure: a strongly patterned shirt can rank a person
+higher than a plain one in the same focus plane. It does not identify every object. Verified
+candidates are reused when reopening the picker on the same unchanged photo. On a CPU (Ryzen 9
+3900X) a photo takes about a minute, most of it SAM 3 analysing the photo once. Model
+installation, cancellation during inference and broader image coverage remain future work. No
+network is used during inference.
 
 Commands: `mask.subject.discover {background?: bool}`, `mask.subject.status`,
 `mask.subject.choose {index, selected}`, `mask.subject.create`, `mask.subject.dismiss`.
