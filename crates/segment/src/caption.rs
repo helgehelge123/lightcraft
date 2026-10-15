@@ -61,6 +61,70 @@ pub fn describe(dir: &Path, rgb: &[u8], w: usize, h: usize) -> Result<String> {
     Ok(caption)
 }
 
+/// Words for people (singular and plural): a phrase with one is the concept "person".
+pub fn is_person_word(word: &str) -> bool {
+    matches!(
+        word,
+        "man"
+            | "men"
+            | "woman"
+            | "women"
+            | "boy"
+            | "boys"
+            | "girl"
+            | "girls"
+            | "person"
+            | "persons"
+            | "people"
+            | "player"
+            | "players"
+            | "athlete"
+            | "athletes"
+            | "child"
+            | "children"
+            | "kid"
+            | "kids"
+            | "lady"
+            | "ladies"
+            | "guy"
+            | "guys"
+            | "team"
+    )
+}
+
+/// Verbs captions put between subjects ("women playing volleyball"); a list, not every "-ing" word
+/// ("building", "ceiling" are things).
+fn is_action(word: &str) -> bool {
+    matches!(
+        word,
+        "holding"
+            | "sitting"
+            | "standing"
+            | "playing"
+            | "jumping"
+            | "hitting"
+            | "spiking"
+            | "serving"
+            | "blocking"
+            | "running"
+            | "walking"
+            | "posing"
+            | "smiling"
+            | "wearing"
+            | "looking"
+            | "throwing"
+            | "catching"
+            | "reaching"
+            | "diving"
+            | "passing"
+            | "celebrating"
+            | "watching"
+            | "waiting"
+            | "kicking"
+            | "riding"
+    )
+}
+
 /// Lightweight phrase extraction for the prototype, not an exhaustive object detector.
 /// Normalize demographic words to "person"; only SAM-verified phrases reach the picker.
 pub fn candidates(caption: &str) -> Vec<String> {
@@ -71,7 +135,7 @@ pub fn candidates(caption: &str) -> Vec<String> {
             return;
         }
         let mut label = phrase.join(" ");
-        if phrase.iter().any(|s| matches!(s.as_str(), "man" | "woman" | "boy" | "girl" | "person" | "people")) {
+        if phrase.iter().any(|s| is_person_word(s)) {
             label = "person".into();
         }
         if !out.contains(&label) && out.len() < 6 {
@@ -81,10 +145,33 @@ pub fn candidates(caption: &str) -> Vec<String> {
     };
     for word in caption.split_whitespace().take(64) {
         let word = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        // articles, prepositions, counts and verbs ("playing", "jumping") end a phrase
         if matches!(
             word.as_str(),
-            "a" | "an" | "the" | "in" | "on" | "with" | "of" | "and" | "holding" | "sitting" | "standing" | "next" | "to" | "at" | "is" | "are"
-        ) {
+            "a" | "an"
+                | "the"
+                | "in"
+                | "on"
+                | "with"
+                | "of"
+                | "and"
+                | "next"
+                | "to"
+                | "at"
+                | "is"
+                | "are"
+                | "two"
+                | "three"
+                | "four"
+                | "five"
+                | "six"
+                | "several"
+                | "many"
+                | "some"
+                | "group"
+                | "couple"
+        ) || is_action(&word)
+        {
             flush(&mut phrase, &mut out);
         } else if !word.is_empty()
             && !matches!(word.as_str(), "young" | "old" | "orange" | "red" | "green" | "blue" | "white" | "black" | "wooden" | "small" | "large")
@@ -106,5 +193,11 @@ mod tests {
         assert_eq!(candidates("a cat and a cat"), ["cat"]);
         assert!(candidates("a the in").is_empty());
         assert_eq!(candidates("a b a c a d a e a f a g a h").len(), 6);
+        // plurals and counts are people too; verbs split phrases
+        assert_eq!(candidates("two women standing on a court"), ["person", "court"]);
+        assert_eq!(candidates("women playing volleyball"), ["person", "volleyball"]);
+        assert_eq!(candidates("a group of girls jumping to block the ball"), ["person", "block", "ball"]);
+        assert_eq!(candidates("a volleyball player hitting the ball"), ["person", "ball"]);
+        assert_eq!(candidates("a building with a ceiling"), ["building", "ceiling"]);
     }
 }

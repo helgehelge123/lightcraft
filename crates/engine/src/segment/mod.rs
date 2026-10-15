@@ -9,7 +9,8 @@
 //!
 //! The model sees the photo as developed, uncropped and without masks, at 1008 px — the frame
 //! mask coordinates live in — so a stored segmentation lines up with the photo at any size.
-//! The optional Subject prototype uses a separate bounded discovery worker (see [`subjects`]).
+//! The optional Subject prototype captions the photo on a thread of its own and finds the phrases on
+//! the worker below (see [`subjects`]).
 //! Standard segmentation work (loading it, rendering and encoding the photo, clicks,
 //! descriptions, detail passes) runs on one worker thread ([`worker`]); the session talks to it
 //! over channels and never waits on a lock. With [`Segmenter::background`] (the desktop app)

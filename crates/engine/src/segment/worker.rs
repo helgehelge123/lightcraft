@@ -61,6 +61,12 @@ pub enum Kind {
         face: [f64; 4],
         parts: Vec<Part>,
     },
+    /// Subject suggestions: each of `labels` found in the photo (every person on their own), sent to
+    /// `reply` (the job's own outcome carries nothing).
+    Subjects {
+        labels: Vec<String>,
+        reply: mpsc::Sender<Result<Vec<super::subjects::Found>, String>>,
+    },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -604,6 +610,10 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     let mut region = None;
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => Operation::Prepare,
+        Kind::Subjects { reply, .. } => {
+            let _ = reply.send(Err("Subject suggestions need the SAM 3 model on this computer; the remote worker doesn't run them yet.".into()));
+            return Ok(None);
+        }
         Kind::Text(text) => Operation::Text(text),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
         Kind::People { .. } => return Err(REMOTE_PEOPLE.into()),
@@ -677,6 +687,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, failed: Option<&st
         Kind::People { face, parts } => {
             let (m, enc) = encoded(state, shared, job, placement)?;
             Ok(people_logits(m, enc, face, &parts)?.map(|l| SegMask::from_logits(side, &l)))
+        }
+        Kind::Subjects { labels, reply } => {
+            let found = encoded(state, shared, job).and_then(|(m, enc)| super::subjects::find(m, enc, &labels));
+            let _ = reply.send(found);
+            Ok(None)
         }
         #[cfg(test)]
         #[allow(clippy::panic)]

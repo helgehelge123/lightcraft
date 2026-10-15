@@ -473,6 +473,33 @@ pub fn share(instances: &mut [Vec<f32>], semantic: &[f32]) {
     }
 }
 
+/// The instances of `out` scoring above `threshold` (sigmoid(logit) × sigmoid(presence)), each its own
+/// mask, best first; a mask that mostly repeats a better one (two queries on the same instance) is left out.
+pub fn distinct_instances(out: &Output, threshold: f32) -> Vec<Prediction> {
+    let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+    let presence = s(out.presence);
+    let mut keep: Vec<(usize, f32)> = out.logits.iter().enumerate().map(|(i, l)| (i, s(*l) * presence)).filter(|(_, p)| *p > threshold).collect();
+    keep.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut found: Vec<Prediction> = Vec::new();
+    for (i, score) in keep {
+        let Some(logits) = out.masks.i(i).ok().and_then(|t| to_vec(&t).ok()) else { continue };
+        if !found.iter().any(|f| overlap(&f.logits, &logits) > 0.8) {
+            found.push(Prediction { logits, score });
+        }
+    }
+    found
+}
+
+/// Intersection over union of two masks' positive pixels.
+fn overlap(a: &[f32], b: &[f32]) -> f64 {
+    let (mut both, mut either) = (0usize, 0usize);
+    for (a, b) in a.iter().zip(b) {
+        both += usize::from(*a > 0.0 && *b > 0.0);
+        either += usize::from(*a > 0.0 || *b > 0.0);
+    }
+    if either == 0 { 0.0 } else { both as f64 / either as f64 }
+}
+
 /// The instances of `out` scoring above `threshold` (sigmoid(logit) × sigmoid(presence)),
 /// merged into one mask: each its share of the semantic mask ([`share`]), then the per-pixel
 /// maximum of their probabilities, as logits.
