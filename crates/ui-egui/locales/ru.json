@@ -2335,7 +2335,7 @@
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
   "Checking the GPU for faces": "Проверка ГП для лиц",
   "AI masks": "ИИ-маски",
-  "Runs on": "Выполняется на",
+  "Device": "Устройство",
   "Last photo": "Последнее фото",
   "Remote worker": "Удалённый обработчик",
   "Run on": "Выполнять на",

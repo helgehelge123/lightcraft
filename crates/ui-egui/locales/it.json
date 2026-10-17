@@ -1992,7 +1992,7 @@
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
   "Unnamed Faces": "Volti senza nome",
   "AI masks": "Maschere IA",
-  "Runs on": "Eseguito su",
+  "Device": "Dispositivo",
   "Last photo": "Ultima foto",
   "Remote worker": "Processo remoto",
   "Not loaded yet": "Non ancora caricato",

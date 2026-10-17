@@ -2343,7 +2343,7 @@
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Ein Gesichtsmodell nutzt die GPU nur, wenn eine Prüfung zeigt, dass sie dieselben Ergebnisse schneller liefert.",
   "Checking the GPU for faces": "GPU für Gesichter wird geprüft",
   "AI masks": "KI-Masken",
-  "Runs on": "Läuft auf",
+  "Device": "Gerät",
   "Last photo": "Letztes Foto",
   "Remote worker": "Entfernter Worker",
   "Run on": "Ausführen auf",
