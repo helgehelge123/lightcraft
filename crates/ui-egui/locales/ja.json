@@ -2342,7 +2342,7 @@
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
   "Checking the GPU for faces": "顔用の GPU を確認中",
   "AI masks": "AIマスク",
-  "Runs on": "実行場所",
+  "Device": "デバイス",
   "Last photo": "直前の写真",
   "Remote worker": "リモートワーカー",
   "Run on": "実行先",

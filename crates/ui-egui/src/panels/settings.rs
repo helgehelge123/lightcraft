@@ -515,7 +515,7 @@ fn ai_masks(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         Some(why) if g.remote_endpoint().is_none() => format!("{device} ({why})"),
         _ => device,
     };
-    row(ui, t, "Runs on", |ui| {
+    row(ui, t, "Device", |ui| {
         let r = ui.add(egui::Label::new(RichText::new(text.clone()).color(t.text)).truncate()).on_hover_text(text);
         register(ui.ctx(), "settings:aiMasksDevice", r.rect);
     });
