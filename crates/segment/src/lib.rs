@@ -12,10 +12,10 @@
 //! the CPU, and the backbone, most of the work, can run outside candle on an accelerator, with
 //! the two necks after it ([`BackboneAccel`]: `lightcraft-gpu`'s wgpu kernels on Vulkan / DX12, loaded with
 //! [`Sam3::load_accelerated`]); when that can't be built or fails on a photo, the candle backbone
-//! takes over ([`Sam3::backbone_fallback`] says why). The accelerator can also run the text
-//! detector's DETR encoder (else, or once it fails, candle does: [`Sam3::detr_fallback`]). The weights are not part of LightCraft: they
-//! are the `facebook/sam3` checkpoint (SAM License), read from a directory the user downloads them
-//! to.
+//! takes over ([`Sam3::backbone_fallback`] says why; not while the app is closing: [`BackboneAccel::closing`]).
+//! The accelerator can also run the text detector's DETR encoder (else, or once it fails, candle does:
+//! [`Sam3::detr_fallback`]). The weights are not part of LightCraft: they are the `facebook/sam3` checkpoint
+//! (SAM License), read from a directory the user downloads them to.
 //!
 //! Ported from the Hugging Face `transformers` implementation (Apache-2.0); see `NOTICE`.
 //! This crate is therefore licensed under the Apache License 2.0 only (not the MIT option of
@@ -120,6 +120,12 @@ pub trait BackboneAccel: Send + Sync {
     fn forward(&self, pixels: &[f32]) -> std::result::Result<Vec<f32>, String>;
     /// What it runs on, for logs and Settings (e.g. "NVIDIA GeForce RTX 5070 (Vulkan)").
     fn device(&self) -> String;
+
+    /// Whether the app is closing, so that an `Err` from it is no failure of the accelerator: it stays in use, and the
+    /// work ends with that error instead of running in candle (no CPU inference while the app quits).
+    fn closing(&self) -> bool {
+        false
+    }
 
     /// Whether it also runs the necks, the DETR encoder and the mask decoder ([`BackboneAccel::neck`],
     /// [`BackboneAccel::detr_encoder`], [`BackboneAccel::mask_decoder`]), for the status.
@@ -263,7 +269,7 @@ impl Sam3 {
 
     /// Load with the backbone on an accelerator `make` builds from the checkpoint, and the rest
     /// on `device`. When `make` fails the candle backbone loads instead, and when the
-    /// accelerator fails later, [`Sam3::encode`] falls back to it (logged, not an error).
+    /// accelerator fails later, [`Sam3::encode`] falls back to it (logged, not an error), unless the app is closing.
     pub fn load_accelerated(
         dir: &Path,
         device: Device,
@@ -412,6 +418,7 @@ impl Sam3 {
                         let backbone = Tensor::from_vec(out, (1, vit::HIDDEN, side, side), &self.device)?;
                         return Ok(Encoded { backbone, tracker: None, detector: None });
                     }
+                    Err(e) if a.closing() => return Err(Error::Model(e)),
                     Err(e) => {
                         log::warn!("SAM 3 backbone failed on {} ({e}); using the {} from now on", a.device(), device_name(&self.device));
                         *self.fallback.lock().unwrap_or_else(PoisonError::into_inner) = Some(format!("{} failed: {e}", a.device()));
@@ -426,13 +433,13 @@ impl Sam3 {
 
     /// The `n` finest levels of the `which` neck for `backbone`, computed by the accelerator and put on the model's
     /// device; `None` when there is no accelerator, it doesn't run this neck or failed on it (logged once; candle
-    /// runs that neck from then on).
-    fn accel_neck(&self, which: NeckKind, backbone: &Tensor, n: usize) -> Option<Vec<Tensor>> {
+    /// runs that neck from then on). `Err` when the app is closing.
+    fn accel_neck(&self, which: NeckKind, backbone: &Tensor, n: usize) -> Result<Option<Vec<Tensor>>> {
         let accel = self.accel.lock().unwrap_or_else(PoisonError::into_inner);
-        let a = accel.as_ref()?;
+        let Some(a) = accel.as_ref() else { return Ok(None) };
         let mut off = self.necks_off.lock().unwrap_or_else(PoisonError::into_inner);
         if off.contains(&which) {
-            return None;
+            return Ok(None);
         }
         let run = || -> std::result::Result<Vec<Tensor>, String> {
             let x = backbone.to_device(&Device::Cpu).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1::<f32>()).map_err(|e| e.to_string())?;
@@ -458,7 +465,8 @@ impl Sam3 {
                 .collect()
         };
         match run() {
-            Ok(levels) => Some(levels),
+            Ok(levels) => Ok(Some(levels)),
+            Err(e) if a.closing() => Err(Error::Model(e)),
             Err(e) => {
                 let name = match which {
                     NeckKind::Tracker => "tracker",
@@ -466,7 +474,7 @@ impl Sam3 {
                 };
                 log::warn!("SAM 3 {name} neck failed on {} ({e}); using the {} for it from now on", a.device(), device_name(&self.device));
                 off.push(which);
-                None
+                Ok(None)
             }
         }
     }
@@ -484,7 +492,7 @@ impl Sam3 {
         if enc.tracker.is_some() {
             return Ok(());
         }
-        let levels = match self.accel_neck(NeckKind::Tracker, &enc.backbone, 3) {
+        let levels = match self.accel_neck(NeckKind::Tracker, &enc.backbone, 3)? {
             Some(levels) => levels,
             None => {
                 if self.tracker_neck.is_none() {
@@ -501,7 +509,7 @@ impl Sam3 {
     /// The `which` neck's three finest levels for `enc`, each `[1, 256, s, s]` (tests and tools): on the
     /// accelerator when it runs it, else in candle.
     pub fn neck_levels(&self, which: NeckKind, enc: &Encoded) -> Result<Vec<Tensor>> {
-        if let Some(levels) = self.accel_neck(which, &enc.backbone, 3) {
+        if let Some(levels) = self.accel_neck(which, &enc.backbone, 3)? {
             return Ok(levels);
         }
         let prefix = match which {
@@ -548,7 +556,7 @@ impl Sam3 {
     /// The detector's features for `enc`, once: its neck on the accelerator when it runs it, else in candle.
     fn detector_features(&mut self, enc: &mut Encoded) -> Result<()> {
         if enc.detector.is_none() {
-            let levels = self.accel_neck(NeckKind::Detector, &enc.backbone, 3);
+            let levels = self.accel_neck(NeckKind::Detector, &enc.backbone, 3)?;
             let (det, _, _) = self.detector_parts()?;
             enc.detector = Some(det.features(&enc.backbone, levels)?);
         }
@@ -714,22 +722,69 @@ mod tests {
             let m = Sam3::load_accelerated(&dir, Device::Cpu, move |_| Ok(Box::new(fake))).unwrap();
             let enc = m.encode(&[128; 4 * 3 * 3], 4, 3).unwrap();
             assert_eq!(m.heads_device(), "CPU; the necks, the DETR encoder and the mask decoder on the GPU");
-            let levels = m.accel_neck(NeckKind::Tracker, enc.backbone(), 3).unwrap();
+            let levels = m.accel_neck(NeckKind::Tracker, enc.backbone(), 3).unwrap().unwrap();
             for (i, (l, side)) in levels.iter().zip([288, 144, 72]).enumerate() {
                 assert_eq!(l.dims(), [1, neck::FPN, side, side]);
                 assert_eq!(l.flatten_all().unwrap().max(0).unwrap().to_scalar::<f32>().unwrap(), i as f32);
             }
             // a wrong level: candle's neck from then on, without asking again
-            assert!(m.accel_neck(NeckKind::Detector, enc.backbone(), 3).is_none());
-            assert!(m.accel_neck(NeckKind::Detector, enc.backbone(), 3).is_none());
+            assert!(m.accel_neck(NeckKind::Detector, enc.backbone(), 3).unwrap().is_none());
+            assert!(m.accel_neck(NeckKind::Detector, enc.backbone(), 3).unwrap().is_none());
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 2);
             assert_eq!(m.heads_device(), "CPU; the click neck, the DETR encoder and the mask decoder on the GPU");
             // the other neck and the backbone stay on the accelerator
-            assert!(m.accel_neck(NeckKind::Tracker, enc.backbone(), 3).is_some());
+            assert!(m.accel_neck(NeckKind::Tracker, enc.backbone(), 3).unwrap().is_some());
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
             assert!(m.accelerated());
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    /// Fails as the GPU does once the app is closing (the backbone or, with a backbone of zeros, a neck).
+    struct Closing {
+        backbone: bool,
+    }
+
+    impl BackboneAccel for Closing {
+        fn forward(&self, _: &[f32]) -> std::result::Result<Vec<f32>, String> {
+            if self.backbone { Err("LightCraft is closing".into()) } else { Ok(vec![0.0; FULL]) }
+        }
+        fn device(&self) -> String {
+            "Fake GPU (Vulkan)".into()
+        }
+        fn closing(&self) -> bool {
+            true
+        }
+        fn runs_heads(&self) -> bool {
+            true
+        }
+        fn neck(&self, _: NeckKind, _: &[f32], _: usize) -> std::result::Result<Vec<Vec<f32>>, String> {
+            Err("LightCraft is closing".into())
+        }
+    }
+
+    #[test]
+    fn closing_is_no_accelerator_failure_and_nothing_runs_in_candle() {
+        let dir = empty_model("closing");
+        let m = Sam3::load_accelerated(&dir, Device::Cpu, with_closing(true)).unwrap();
+        let e = m.encode(&[128; 4 * 3 * 3], 4, 3).err().unwrap();
+        assert!(e.to_string().contains("LightCraft is closing"), "{e}");
+        assert!(m.backbone.get().is_none(), "the candle backbone was never loaded");
+        assert!(m.accelerated());
+        assert_eq!((m.backbone_device().as_str(), m.backbone_fallback()), ("Fake GPU (Vulkan)", None));
+        // a neck: the error, not candle's neck, and the accelerator keeps it
+        let m = Sam3::load_accelerated(&dir, Device::Cpu, with_closing(false)).unwrap();
+        let enc = m.encode(&[128; 4 * 3 * 3], 4, 3).unwrap();
+        for which in [NeckKind::Tracker, NeckKind::Detector] {
+            assert!(m.accel_neck(which, enc.backbone(), 3).is_err_and(|e| e.to_string().contains("closing")), "{which:?}");
+            assert!(m.neck_levels(which, &enc).is_err_and(|e| e.to_string().contains("closing")), "{which:?}");
+        }
+        assert_eq!(m.heads_device(), "CPU; the necks, the DETR encoder and the mask decoder on the GPU");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn with_closing(backbone: bool) -> impl FnOnce(&WeightReader) -> std::result::Result<Box<dyn BackboneAccel>, String> {
+        move |_| Ok(Box::new(Closing { backbone }))
     }
 
     #[test]

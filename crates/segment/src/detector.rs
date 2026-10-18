@@ -263,7 +263,8 @@ impl Detector {
     }
 
     /// [`Detector::encode`] on the accelerator; `None` when there is none, or it doesn't run the encoder or fails (the
-    /// first failure is logged and noted in `accel.failed`, and the accelerator isn't asked again).
+    /// first failure is logged and noted in `accel.failed`, and the accelerator isn't asked again). `Err` when the app is
+    /// closing.
     fn encode_accelerated(&self, f: &Features, text: &Tensor, valid: &[bool], accel: &EncoderAccel) -> Result<Option<Tensor>> {
         if accel.failed.get().is_some() {
             return Ok(None);
@@ -284,6 +285,7 @@ impl Detector {
         });
         match checked {
             Ok(out) => Ok(Some(Tensor::from_vec(out, f.flat.dims(), &self.device)?)),
+            Err(e) if a.closing() => Err(Error::Model(e)),
             Err(e) => {
                 log::warn!("SAM 3 DETR encoder not run on {} ({e}); using the {} for it from now on", a.device(), crate::device_name(&self.device));
                 let _ = accel.failed.set(format!("{}: {e}", a.device()));
@@ -313,7 +315,8 @@ impl Detector {
     }
 
     /// [`Detector::masks`] on the accelerator; `None` when there is none, or it doesn't run the mask decoder or fails
-    /// (the first failure is logged and noted in `accel.masks_failed`, and the accelerator isn't asked again).
+    /// (the first failure is logged and noted in `accel.masks_failed`, and the accelerator isn't asked again). `Err` when
+    /// the app is closing.
     fn masks_accelerated(
         &self,
         f: &Features,
@@ -350,6 +353,7 @@ impl Detector {
         });
         match checked {
             Ok(out) => Ok(Some(Tensor::from_vec(out, (QUERIES, mh, mw), &self.device)?)),
+            Err(e) if a.closing() => Err(Error::Model(e)),
             Err(e) => {
                 log::warn!("SAM 3 mask decoder not run on {} ({e}); using the {} for it from now on", a.device(), crate::device_name(&self.device));
                 let _ = accel.masks_failed.set(format!("{}: {e}", a.device()));

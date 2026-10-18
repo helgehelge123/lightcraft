@@ -1154,6 +1154,10 @@ impl BackboneAccel for Sam3Gpu {
         guarded(|| self.masks.run(self.dev, memory, text, valid, levels, rows, bias))
     }
 
+    fn closing(&self) -> bool {
+        crate::shutting_down()
+    }
+
     fn runs_heads(&self) -> bool {
         true
     }
