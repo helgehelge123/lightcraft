@@ -188,6 +188,12 @@ fn note_run(shared: &Shared, m: &Sam3, encode: Option<Duration>) {
     }
 }
 
+/// Note where the backbone ran a detail pass (a zoomed-in region): not how long it took, since the last photo's
+/// times are its whole analysis and the backbone run in it.
+fn note_detail(shared: &Shared, m: &Sam3) {
+    note_run(shared, m, None);
+}
+
 fn millis(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
@@ -515,7 +521,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<S
             let m = model(state, shared, &job.dir, job.cpu)?;
             let t = web_time::Instant::now();
             let enc = m.encode(&input.rgb, input.w, input.h);
-            note_run(shared, m, enc.is_ok().then(|| t.elapsed()));
+            note_detail(shared, m);
             let mut enc = enc.map_err(|e| e.to_string())?;
             let (rw, rh) = (region[2] - region[0], region[3] - region[1]);
             if !(rw > 0.0 && rh > 0.0) {
@@ -758,6 +764,26 @@ mod tests {
         let b = backend(&shared);
         assert_eq!((b.device.as_deref(), b.runtime.as_deref()), (Some("CPU"), Some("candle")));
         assert!(b.fallback.as_deref().is_some_and(|f| f.contains("device lost")), "{b:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_detail_pass_leaves_the_last_photos_times_alone() {
+        let dir = empty_model("detail");
+        let m = load(&dir, Device::Cpu, &Placement::GpuBackbone, failing_gpu).unwrap();
+        let shared = Shared::default();
+        note_loaded(&shared, &m, &Placement::GpuBackbone);
+        {
+            let mut b = shared.backend.lock().unwrap();
+            (b.encode_ms, b.analyze_ms) = (Some(812), Some(900));
+        }
+        // the zoomed-in region: the GPU fails on it, and the status says where the backbone runs now
+        let _ = m.encode(&[0; 8 * 8 * 3], 8, 8);
+        note_detail(&shared, &m);
+        let b = backend(&shared);
+        assert_eq!((b.device.as_deref(), b.runtime.as_deref()), (Some("CPU"), Some("candle")));
+        assert!(b.fallback.as_deref().is_some_and(|f| f.contains("device lost")), "{b:?}");
+        assert_eq!((b.encode_ms, b.analyze_ms), (Some(812), Some(900)), "the last photo's times");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
