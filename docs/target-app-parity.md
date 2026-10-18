@@ -94,7 +94,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | 2026-10-12 | minor | Epson ERF decoded (raw-parity.md): 240 models verified, 229 preview-only; shares and rounded numbers unchanged |
 | Subject / Sky / Background masks | classical heuristics; the file's own DNG semantic mattes | 🟡 |
 | People (faces, body, hair, skin…) and Landscape masks | — | ⬜ |
-| Object / Describe masks | SAM 3 in pure Rust (Metal on macOS; elsewhere the image encoder, necks and text detector's encoder on the GPU through wgpu, the heads on the CPU, CPU fallback); opt-in 3.4 GB download, no mirror configured | 🟡 |
+| Object / Describe masks | SAM 3 in pure Rust (Metal on macOS; elsewhere the image encoder, necks and text detector's DETR encoder and mask decoder on the GPU through wgpu, the rest of the heads on the CPU, CPU fallback); opt-in 3.4 GB download, no mirror configured | 🟡 |
 | Depth range mask, Lens Blur | — | ⬜ |
 | AI Denoise | Bayer only, pure-Rust CPU / GPU, user-installed weights | 🟡 |
 | Raw Details, Super Resolution | — | ⬜ |

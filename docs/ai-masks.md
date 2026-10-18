@@ -3,9 +3,9 @@
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
 through Metal on macOS; on Linux and Windows the image encoder (most of the work) runs on the GPU
-through wgpu (Vulkan / DX12), with the two necks and the text detector's encoder, and the rest on
-the CPU, falling back to the CPU when there is no
-usable GPU ([Where it runs](#where-it-runs)).
+through wgpu (Vulkan / DX12), with the two necks and the text detector's DETR encoder and mask
+decoder, and the rest on the CPU, falling back to the CPU when there is no usable GPU
+([Where it runs](#where-it-runs)).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
 Object and Describe offer to download it, every other feature (and every existing mask, see
