@@ -173,7 +173,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                 crate::widgets::announce(&resp, g.to_string());
-                register(ui.ctx(), if favorites { "presetGroup:fav".to_string() } else { format!("presetGroup:{g}") }, r);
+                // outside the `presetGroup:{name}` namespace, so a user group named "fav" can't shadow it
+                register(ui.ctx(), if favorites { "presetFavorites".to_string() } else { format!("presetGroup:{g}") }, r);
                 paint(
                     ui.painter(),
                     Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(16.0, 16.0)),
