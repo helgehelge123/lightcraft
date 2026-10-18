@@ -159,6 +159,26 @@ fn space_held_click_zooms_to_the_point_clicked_and_back() {
 }
 
 #[test]
+fn a_click_down_and_up_within_one_frame_is_not_a_tap() {
+    // a real mouse can deliver the press and the release in the same frame: no button is down
+    // then, yet the click zoomed, and letting go of Space quickly must not zoom back
+    let mut h = detail(Some("panel.remove"));
+    space(&mut h, "down");
+    pointer(&mut h, json!([{"kind": "move", "x": 0.25, "y": 0.3}]));
+    let img = h.app.image_rect.unwrap();
+    let pos = egui::pos2(img.left() + 0.25 * img.width(), img.top() + 0.3 * img.height());
+    for pressed in [true, false] {
+        h.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+    let zoomed = Zoom::Percent(h.app.ui.click_zoom as f32);
+    assert_eq!(h.app.ui.zoom, zoomed, "the click did not zoom");
+    space(&mut h, "up");
+    assert!(h.app.space_hand.is_none());
+    assert_eq!(h.app.ui.zoom, zoomed, "the release toggled the zoom back");
+}
+
+#[test]
 fn a_tap_over_a_tool_toggles_on_release_and_a_long_hold_does_not() {
     let mut h = detail(Some("panel.remove"));
     let spots = develop(&h).spots.len();

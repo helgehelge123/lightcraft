@@ -53,8 +53,9 @@ pub(crate) fn begin(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 /// zoom as it ends.
 pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(mut hand) = app.space_hand else { return };
-    let (held, pointer, now) = ctx.input(|i| (i.key_down(Key::Space), i.pointer.any_down(), i.time));
-    hand.used |= pointer;
+    let (held, pointer, pressed, now) = ctx.input(|i| (i.key_down(Key::Space), i.pointer.any_down(), i.pointer.any_pressed(), i.time));
+    // a quick click can go down and up within one frame: no button is down then, but it pressed
+    hand.used |= pointer || pressed;
     let tool = tool_owns_pointer(app) && app.ui.dialog.is_none();
     // held, or let go in the middle of a pan: the hand stays until the button is up
     if tool && (held || pointer) {
