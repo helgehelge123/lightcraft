@@ -3,6 +3,7 @@
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (LR-MASK-OBJECTS: SAM 3's mask decoder on the GPU through wgpu outside macOS) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (LR-MASK-PEOPLE: People masks with SAM 3, commands only) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** patch (LR-LIB-CULL: bursts can be stacked, best on top) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** patch (LR-LIB-CULL: focus measured on the subject) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -119,6 +120,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-LIB-SHOWFINDER | Reveal original in file manager | P0 | ✅ | `cmd:app.showInFinder` | ⌘R (see MENU-FILE-SHOWFINDER) |
 | LR-LIB-COVER | Album cover | P2 | ✅ | `cmd:album.setCover` | |
 | LR-LIB-CULL | Assisted culling | P2 | 🟡 | `cmd:photo.analyze`, `cmd:dialog.cull`, `crates/pipeline/src/cull.rs` | Photo ▸ Assisted Culling…: focus score (0–100), clipping, burst grouping (look-alike shots within 10 s, both limits adjustable in the dialog and as `burstGap` / `similarity`, #2275) with the sharpest marked, optionally stacked collapsed with the best photo on top (`stackGroups`, #2277; photos already stacked are left alone); reject below a focus score, pick each burst's best; classical measures — no eyes-closed / expression detection |
+| LR-LIB-CULL | Assisted culling | P2 | 🟡 | `cmd:photo.analyze`, `cmd:dialog.cull`, `crates/pipeline/src/cull.rs` | Photo ▸ Assisted Culling…: focus score (0–100), clipping, burst grouping (look-alike shots within 10 s, both limits adjustable in the dialog and as `burstGap` / `similarity`, #2275) with the sharpest marked; reject below a focus score, pick each burst's best; focus is measured on the subject where one is known — face and pet regions (Detect Faces or XMP; each grown 15 %, averaged by area), else the camera's focus point (read on Sony bodies), else the whole frame — with the score used (`sharpness`, so rejects, each burst's best and the rules go by it) and what it was measured on (`subject`, `focusOn`, `frame`; #2276; a box too small on the thumbnail is measured on the preview); classical measures — no eyes-open / eyes-closed or expression detection |
 | LR-LIB-ACTIVITY | Comments & likes | OOS | 🚫 | | |
 | LR-LIB-QUICKCOLL | Quick collection [Classic] | P2 | ✅ | `cmd:album.toggleTarget`, `cmd:album.clearQuick` | B in the grids |
 | LR-LIB-VIRTUALCOPY | Virtual copies [Classic] | P1 | ✅ | `cmd:photo.virtualCopy`, `cmd:photo.delete`, `crates/engine/src/cmd/organize.rs` | “Copy N” badge, stacked with the original, same albums, no XMP writes; deleting a copy dissolves or renumbers the stack (#1493); no “Set Copy as Master” |
@@ -807,6 +809,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-12 | minor | LR-MASK-SKY: reuse the installed model for new Sky selections; preserve saved masks and disclose approximation; status unchanged |
 | 2026-10-19 | minor | LR-MASK-PEOPLE: People masks pick one person by a face region with SAM 3 (Entire Person, Hair, Clothes, Skin; `mask.add` `people`, `photo.faces`), no panel UI yet; ⬜ → 🟡 |
 | 2026-10-19 | patch | LR-LIB-CULL: Assisted Culling can stack each burst collapsed with its best photo on top (dialog checkbox, `photo.analyze` `stackGroups`; #2277). Statuses and feature counts unchanged. |
+| 2026-10-19 | patch | LR-LIB-CULL: Assisted Culling measures focus on the subject — face and pet regions, else the camera's focus point, else the frame (`photo.analyze` `subject` / `focusOn` / `frame`, catalog format v10; #2276). Statuses and feature counts unchanged. |
 | 2026-10-19 | patch | LR-LIB-CULL: Assisted Culling's burst gap and similarity are adjustable (dialog, `photo.analyze` `burstGap` / `similarity`; #2275). Statuses and feature counts unchanged. |
 | 2026-10-14 | patch | LR-EXP-TYPE: opaque 8-bit PNG/TIFF/WebP use RGB; transparent exports retain alpha (#1670). Statuses and feature counts unchanged. |
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
