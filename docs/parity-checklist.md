@@ -2,6 +2,7 @@
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (LR-MASK-OBJECTS: SAM 3's mask decoder on the GPU through wgpu outside macOS) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (LR-MASK-PEOPLE: People masks with SAM 3, commands only) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** patch (LR-LIB-CULL: bursts can be stacked, best on top) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -117,7 +118,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-LIB-CAPTURETIME | Edit capture time | P1 | ✅ | `cmd:photo.setCaptureTime`, `cmd:dialog.captureTime`, `crates/catalog/src/dates.rs` | set (the other selected photos shift by the same amount, or `each`), shift by days/hours/minutes, time-zone shift; one undo step, journaled; Info panel button; no “revert to original capture time”. Impossible calendar dates cannot anchor relative shifts; rejection preserves metadata, selection, Undo and Redo. |
 | LR-LIB-SHOWFINDER | Reveal original in file manager | P0 | ✅ | `cmd:app.showInFinder` | ⌘R (see MENU-FILE-SHOWFINDER) |
 | LR-LIB-COVER | Album cover | P2 | ✅ | `cmd:album.setCover` | |
-| LR-LIB-CULL | Assisted culling | P2 | 🟡 | `cmd:photo.analyze`, `cmd:dialog.cull`, `crates/pipeline/src/cull.rs` | Photo ▸ Assisted Culling…: focus score (0–100), clipping, burst grouping (look-alike shots within 10 s) with the sharpest marked; reject below a focus score, pick each burst's best; classical measures — no eyes-closed / expression detection |
+| LR-LIB-CULL | Assisted culling | P2 | 🟡 | `cmd:photo.analyze`, `cmd:dialog.cull`, `crates/pipeline/src/cull.rs` | Photo ▸ Assisted Culling…: focus score (0–100), clipping, burst grouping (look-alike shots within 10 s, both limits adjustable in the dialog and as `burstGap` / `similarity`, #2275) with the sharpest marked, optionally stacked collapsed with the best photo on top (`stackGroups`, #2277; photos already stacked are left alone); reject below a focus score, pick each burst's best; classical measures — no eyes-closed / expression detection |
 | LR-LIB-ACTIVITY | Comments & likes | OOS | 🚫 | | |
 | LR-LIB-QUICKCOLL | Quick collection [Classic] | P2 | ✅ | `cmd:album.toggleTarget`, `cmd:album.clearQuick` | B in the grids |
 | LR-LIB-VIRTUALCOPY | Virtual copies [Classic] | P1 | ✅ | `cmd:photo.virtualCopy`, `cmd:photo.delete`, `crates/engine/src/cmd/organize.rs` | “Copy N” badge, stacked with the original, same albums, no XMP writes; deleting a copy dissolves or renumbers the stack (#1493); no “Set Copy as Master” |
@@ -805,6 +806,8 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 |---|---|---|
 | 2026-10-12 | minor | LR-MASK-SKY: reuse the installed model for new Sky selections; preserve saved masks and disclose approximation; status unchanged |
 | 2026-10-19 | minor | LR-MASK-PEOPLE: People masks pick one person by a face region with SAM 3 (Entire Person, Hair, Clothes, Skin; `mask.add` `people`, `photo.faces`), no panel UI yet; ⬜ → 🟡 |
+| 2026-10-19 | patch | LR-LIB-CULL: Assisted Culling can stack each burst collapsed with its best photo on top (dialog checkbox, `photo.analyze` `stackGroups`; #2277). Statuses and feature counts unchanged. |
+| 2026-10-19 | patch | LR-LIB-CULL: Assisted Culling's burst gap and similarity are adjustable (dialog, `photo.analyze` `burstGap` / `similarity`; #2275). Statuses and feature counts unchanged. |
 | 2026-10-14 | patch | LR-EXP-TYPE: opaque 8-bit PNG/TIFF/WebP use RGB; transparent exports retain alpha (#1670). Statuses and feature counts unchanged. |
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: Hasselblad 3FR and FFF show their uncompressed RGB preview (no JPEG in these files) in the grid and loupe until developed, and as the stand-in when a file fails to decode; status unchanged (🟡) |

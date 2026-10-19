@@ -728,6 +728,13 @@ pub struct UiState {
     /// The last person page left: the People view offers a way back to it next to its title.
     #[serde(skip)]
     pub last_person: Option<String>,
+    /// Assisted Culling's burst settings last confirmed (gap in seconds, similarity), for this
+    /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
+    #[serde(skip)]
+    pub cull_burst: Option<(f32, f32)>,
+    /// Whether Assisted Culling stacked its bursts the last time it was confirmed (this session).
+    #[serde(skip)]
+    pub cull_stack: bool,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -1089,10 +1096,14 @@ pub enum Dialog {
     /// Help ▸ What's New.
     WhatsNew,
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
-    /// of each burst.
+    /// of each burst (and stack each burst, best on top, with `stack_groups`); shots at most
+    /// `burst_gap` seconds apart and at least `similarity` alike are a burst.
     Cull {
         reject_below: f32,
         pick_best: bool,
+        stack_groups: bool,
+        burst_gap: f32,
+        similarity: f32,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -1313,6 +1324,8 @@ impl Default for UiState {
             person_page: None,
             person_from: None,
             last_person: None,
+            cull_burst: None,
+            cull_stack: false,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),

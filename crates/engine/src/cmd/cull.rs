@@ -1,7 +1,7 @@
 //! Assisted culling: score photos for focus and clipping, group similar shots taken close
 //! together (bursts) and mark the sharpest of each group; optionally reject blurry ones and pick
-//! each group's best. Scores are kept on the photos (rules / smart albums: `sharpness`,
-//! `bestOfGroup`).
+//! each group's best, and stack each burst with its best photo on top. Scores are kept on the
+//! photos (rules / smart albums: `sharpness`, `bestOfGroup`).
 
 use lightcraft_catalog::{Analysis, Flag, Op, PhotoId};
 use serde_json::{Value, json};
@@ -9,10 +9,12 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, cmd};
 use crate::{Result, Session};
 
-/// Seconds between shots of the same burst at most.
-const BURST_GAP: i64 = 10;
-/// Signature similarity for "the same scene".
-const SAME: f32 = 0.93;
+/// Seconds between shots of the same burst at most (default of `burstGap`).
+const BURST_GAP: f64 = 10.0;
+/// Signature similarity for "the same scene" (default of `similarity`).
+const SAME: f64 = 0.93;
+/// The longest `burstGap` accepted: a day.
+const MAX_GAP: f64 = 86_400.0;
 
 fn secs(iso: &str) -> Option<i64> {
     let d = lightcraft_meta::DateTime::parse_iso(iso)?;
@@ -20,9 +22,17 @@ fn secs(iso: &str) -> Option<i64> {
 }
 
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    let mut ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    // a photo named twice is measured (and stacked) once
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(*id));
     let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
+    let (gap, same) = burst_params(p)?;
+    let stack_groups = match p.get("stackGroups") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| super::bad("photo.analyze", "`stackGroups` must be true or false"))?,
+    };
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
     let mut rows: Vec<(PhotoId, Option<i64>, f32, f32, [f32; 64])> = Vec::new();
     let mut failed = Vec::new();
@@ -42,8 +52,8 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let mut next = 1u32;
     for i in 1..rows.len() {
         let (a, b) = (&rows[i - 1], &rows[i]);
-        let close = matches!((a.1, b.1), (Some(x), Some(y)) if (y - x).abs() <= BURST_GAP);
-        if close && lightcraft_pipeline::cull::similarity(&a.4, &b.4) >= SAME {
+        let close = matches!((a.1, b.1), (Some(x), Some(y)) if (y.saturating_sub(x)).unsigned_abs() as f64 <= gap);
+        if close && lightcraft_pipeline::cull::similarity(&a.4, &b.4) >= same {
             let g = *group_of[i - 1].get_or_insert_with(|| {
                 next += 1;
                 next - 1
@@ -77,10 +87,69 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(json!({"id": id.0, "sharpness": (sharp * 10.0).round() / 10.0, "clipped": clip, "group": g, "best": is_best}));
     }
+    let mut stacks = 0;
+    if stack_groups {
+        // Photos already in a stack stay where they are (like `stack.auto`): a burst is stacked
+        // from its other photos when two or more remain, with the sharpest of those on top.
+        let index = s.catalog.stack_index();
+        let mut members: std::collections::BTreeMap<u32, Vec<(PhotoId, f32)>> = Default::default();
+        for (i, g) in group_of.iter().enumerate() {
+            if let (Some(g), Some(r)) = (g, rows.get(i))
+                && !index.contains_key(&r.0)
+                && s.catalog.photo(r.0).is_some_and(|ph| !ph.deleted)
+            {
+                members.entry(*g).or_default().push((r.0, r.2));
+            }
+        }
+        for group in members.values() {
+            let Some(top) = group.iter().fold(None::<(PhotoId, f32)>, |b, m| if b.is_none_or(|b| m.1 > b.1) { Some(*m) } else { b }) else {
+                continue;
+            };
+            let photos: Vec<PhotoId> = group.iter().map(|m| m.0).collect();
+            if photos.len() >= 2
+                && let Some(op) = s.catalog.group_ops(top.0, &photos, true)
+            {
+                ops.push(op);
+                stacks += 1;
+            }
+        }
+    }
     if !ops.is_empty() {
         s.commit("Assisted Culling", Op::Batch { ops })?;
     }
-    Ok(json!({"photos": out, "groups": best.len(), "rejected": rejected, "picked": picked, "failed": failed}))
+    if stacks > 0 {
+        // a photo now hidden inside a collapsed stack must not stay the active one: its stack's
+        // top takes over, and the rest of the selection (what was culled) stays selected
+        let vis = s.visible_cloned();
+        if let Some(a) = s.selection.active
+            && !vis.contains(&a)
+            && let Some(st) = s.catalog.stack_of(a)
+        {
+            let top = vis.iter().copied().find(|p| st.photos.contains(p)).unwrap_or(st.top());
+            s.selection.ids.retain(|id| vis.contains(id));
+            if !s.selection.ids.contains(&top) {
+                s.selection.ids.push(top);
+            }
+            s.selection.active = Some(top);
+        }
+    }
+    Ok(json!({"photos": out, "groups": best.len(), "stacks": stacks, "rejected": rejected, "picked": picked, "failed": failed}))
+}
+
+/// `burstGap` (seconds, 0..=a day) and `similarity` (0..=1) of `photo.analyze`, refused before
+/// anything is measured when they are not numbers in range.
+fn burst_params(p: &Value) -> Result<(f64, f32)> {
+    const C: &str = "photo.analyze";
+    let num = |key: &str, d: f64, max: f64| -> Result<f64> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(d),
+            Some(v) => match v.as_f64() {
+                Some(x) if x.is_finite() && (0.0..=max).contains(&x) => Ok(x),
+                _ => Err(super::bad(C, format!("`{key}` must be a number from 0 to {max}"))),
+            },
+        }
+    };
+    Ok((num("burstGap", BURST_GAP, MAX_GAP)?, num("similarity", SAME, 1.0)? as f32))
 }
 
 /// Find Similar: photos that look like `id` (signatures from thumbnail-level sources, cached by
@@ -133,7 +202,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots taken within 10 s and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, stackGroups?: bool (false), burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos, pick each group's best and, with `stackGroups`, stack each burst collapsed with its sharpest photo on top (photos already in a stack stay put: the rest of a burst is stacked when two or more remain); one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, stacks, rejected, picked, failed}",
             always,
             analyze
         ),
