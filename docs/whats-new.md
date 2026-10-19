@@ -3,11 +3,11 @@
 ## 2026-10-19
 
 ### People masks pick one person
-- A People mask selects parts of one person, picked by their face: Entire Person, Hair, Clothes and Skin, in any
-  combination, with SAM 3 (the optional AI mask model). Another person's hair or clothes stay out even where they
-  overlap. Skin is the person without their hair and clothes for now. The Masking panel's People menu comes next;
-  until then agents and scripts make them with `mask.add {kind: "people", person, parts}`, and `photo.faces` lists a
-  photo's faces (see `docs/ai-masks.md`).
+- Masking ▸ People selects parts of one person, picked by their face: Entire Person, Face Skin, Body Skin, Hair and
+  Clothes, in any combination, with SAM 3 (the optional AI mask model). Pick the face from the list (names from the
+  People view, else Person 1, 2…), tick the parts, Create Mask; + / − ▸ People… adds or takes away. Another person's
+  hair, clothes or hand stay out even where they overlap. Agents and scripts use `mask.add {kind: "people", person,
+  parts}`; `photo.faces` lists a photo's faces (see `docs/ai-masks.md`).
 - The catalog format is now version 10 (a People mask's selection). Once this version has opened a library, older
   LightCraft versions refuse it ("written by a newer version") instead of dropping the selection.
 

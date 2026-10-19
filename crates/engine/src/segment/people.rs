@@ -1,25 +1,28 @@
 //! People masks: one person, picked by their face among SAM 3's "person" instances, and the
-//! parts of them asked for (Hair, Clothes, Skin) from further detections, cut to that person so
-//! a neighbour's hair stays out. Pure functions over logit grids (no model), tested without it.
+//! parts of them asked for (Face Skin, Body Skin, Hair, Clothes) from further detections, cut to
+//! that person so a neighbour's hair stays out. Pure functions over logit grids (no model), tested
+//! without it.
 //!
 //! Logits combine like fuzzy sets: a union is the maximum, an intersection the minimum, "a
 //! without b" is min(a, −b). That is the boolean operation wherever the model is sure, and the
 //! edges stay as soft as the model's.
 //!
-//! **Skin is an approximation:** the person without their hair and clothes (SAM 3 has no skin
-//! concept), so glasses, jewellery, a bag or anything else that is neither stays in it.
+//! Skin is SAM 3's own "skin" concept (knee pads, socks and shoes stay out); Face Skin is the part
+//! of it inside the "face" detection, Body Skin the rest. Eyes and lips are still part of the face.
 
 /// The parts a People mask can select now, as the Masking panel names them.
-pub const PARTS: [&str; 4] = ["Entire Person", "Hair", "Clothes", "Skin"];
+pub const PARTS: [&str; 5] = ["Entire Person", "Face Skin", "Body Skin", "Hair", "Clothes"];
 
 /// Score above which a "person" instance can be the one at the face: lower than Describe's,
 /// because the face already says someone is there.
 pub const PERSON_THRESHOLD: f32 = 0.3;
-/// Score above which hair and clothes instances count (Describe's).
+/// Score above which the parts' instances count (Describe's).
 pub const PART_THRESHOLD: f32 = 0.5;
-/// What the model is asked for, per part.
+/// What the model is asked for, per detection.
 pub const HAIR_PROMPT: &str = "hair";
 pub const CLOTHES_PROMPT: &str = "clothes";
+pub const SKIN_PROMPT: &str = "skin";
+pub const FACE_PROMPT: &str = "face";
 
 /// A logit that selects nothing.
 const NONE: f32 = -16.0;
@@ -27,21 +30,22 @@ const NONE: f32 = -16.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
     Person,
+    FaceSkin,
+    BodySkin,
     Hair,
     Clothes,
-    Skin,
 }
 
 impl Part {
     /// The part a name means (case and spaces don't matter: "entire person", "EntirePerson",
-    /// "person"; "clothing" is Clothes).
+    /// "person"; "clothing" is Clothes). "Skin" is two parts, see [`parts_of`].
     pub fn parse(name: &str) -> Option<Part> {
-        let n: String = name.chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').collect::<String>().to_lowercase();
-        Some(match n.as_str() {
+        Some(match squash(name).as_str() {
             "entireperson" | "person" | "wholeperson" => Part::Person,
+            "faceskin" => Part::FaceSkin,
+            "bodyskin" => Part::BodySkin,
             "hair" => Part::Hair,
             "clothes" | "clothing" => Part::Clothes,
-            "skin" => Part::Skin,
             _ => return None,
         })
     }
@@ -49,21 +53,33 @@ impl Part {
     pub fn name(self) -> &'static str {
         match self {
             Part::Person => PARTS[0],
-            Part::Hair => PARTS[1],
-            Part::Clothes => PARTS[2],
-            Part::Skin => PARTS[3],
+            Part::FaceSkin => PARTS[1],
+            Part::BodySkin => PARTS[2],
+            Part::Hair => PARTS[3],
+            Part::Clothes => PARTS[4],
         }
     }
 }
 
-/// The parts `names` ask for, once each (none: the entire person); an unknown name is an error
-/// that lists the parts there are.
+/// A name without case, spaces, `_` and `-`.
+fn squash(name: &str) -> String {
+    name.chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').collect::<String>().to_lowercase()
+}
+
+/// The parts `names` ask for, once each (none: the entire person; "Skin": Face Skin and Body
+/// Skin); an unknown name is an error that lists the parts there are.
 pub fn parts_of(names: &[String]) -> Result<Vec<Part>, String> {
     let mut out = Vec::new();
     for n in names {
-        let p = Part::parse(n).ok_or_else(|| format!("unknown part `{n}` of a person (one of: {})", PARTS.join(", ")))?;
-        if !out.contains(&p) {
-            out.push(p);
+        let found = match Part::parse(n) {
+            Some(p) => vec![p],
+            None if squash(n) == "skin" => vec![Part::FaceSkin, Part::BodySkin],
+            None => return Err(format!("unknown part `{n}` of a person (one of: {}, or Skin for both skins)", PARTS.join(", "))),
+        };
+        for p in found {
+            if !out.contains(&p) {
+                out.push(p);
+            }
         }
     }
     if out.is_empty() {
@@ -72,10 +88,31 @@ pub fn parts_of(names: &[String]) -> Result<Vec<Part>, String> {
     Ok(out)
 }
 
-/// Whether `parts` need the hair and the clothes detections.
-pub fn needs(parts: &[Part]) -> (bool, bool) {
-    let any = |want: &[Part]| parts.iter().any(|p| want.contains(p));
-    (any(&[Part::Hair, Part::Skin]), any(&[Part::Clothes, Part::Skin]))
+/// The detections a selection of parts needs (besides the person).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Needs {
+    pub hair: bool,
+    pub clothes: bool,
+    pub skin: bool,
+    /// Only to tell face skin from body skin: not when both are asked for.
+    pub face: bool,
+}
+
+/// What `parts` need detected.
+pub fn needs(parts: &[Part]) -> Needs {
+    let has = |p: Part| parts.contains(&p);
+    let (face_skin, body_skin) = (has(Part::FaceSkin), has(Part::BodySkin));
+    Needs { hair: has(Part::Hair), clothes: has(Part::Clothes), skin: face_skin || body_skin, face: face_skin != body_skin }
+}
+
+/// The detections made for a selection (`side × side` logits each, everyone's merged; `None`:
+/// not asked for, or nothing found).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Found<'a> {
+    pub hair: Option<&'a [f32]>,
+    pub clothes: Option<&'a [f32]>,
+    pub skin: Option<&'a [f32]>,
+    pub face: Option<&'a [f32]>,
 }
 
 /// A face box from a client or a document: finite, inside the photo (clamped) and not empty.
@@ -130,24 +167,27 @@ pub fn pick_person(cands: &[Candidate], side: usize, face: [f64; 4]) -> Option<u
 
 /// The selection of `parts` of a person (all grids `side × side` logits): the union of
 /// - Entire Person: `person`;
-/// - Hair, Clothes: the `hair` / `clothes` found (anyone's) within `person`;
-/// - Skin: `person` without hair and clothes.
+/// - Hair, Clothes: the hair / clothes found (anyone's) within `person`;
+/// - Face Skin: the skin found within the face found, within `person`;
+/// - Body Skin: the skin found outside the face found, within `person` (all of their skin when
+///   no face was looked for or found).
 ///
-/// A detection that found nothing (`None`) selects nothing and takes nothing away.
-pub fn compose(person: &[f32], hair: Option<&[f32]>, clothes: Option<&[f32]>, parts: &[Part]) -> Vec<f32> {
+/// A detection that found nothing selects nothing and takes nothing away.
+pub fn compose(person: &[f32], found: &Found, parts: &[Part]) -> Vec<f32> {
     let at = |g: Option<&[f32]>, i: usize| g.and_then(|g| g.get(i)).copied().unwrap_or(NONE);
     person
         .iter()
         .enumerate()
         .map(|(i, &p)| {
-            let (h, c) = (at(hair, i).min(p), at(clothes, i).min(p));
+            let (skin, face) = (at(found.skin, i).min(p), at(found.face, i));
             parts
                 .iter()
                 .map(|part| match part {
                     Part::Person => p,
-                    Part::Hair => h,
-                    Part::Clothes => c,
-                    Part::Skin => p.min(-at(hair, i)).min(-at(clothes, i)),
+                    Part::Hair => at(found.hair, i).min(p),
+                    Part::Clothes => at(found.clothes, i).min(p),
+                    Part::FaceSkin => skin.min(face),
+                    Part::BodySkin => skin.min(-face),
                 })
                 .fold(NONE, f32::max)
         })
@@ -249,33 +289,46 @@ mod tests {
         // Ann's hair runs over Ben's shoulder; Ben has short hair
         let hair = union(&rect([0.1, 0.1, 0.65, 0.4]), &rect([0.68, 0.1, 0.82, 0.16]));
         let clothes = union(&rect([0.05, 0.5, 0.45, 1.0]), &rect([0.55, 0.5, 0.95, 1.0]));
-        let hair_only = compose(ann, Some(&hair), Some(&clothes), &[Part::Hair]);
+        // skin: both faces, both necks, and Ben's hand on Ann's sleeve
+        let skin = union(&union(&rect([0.15, 0.15, 0.35, 0.5]), &rect([0.65, 0.15, 0.85, 0.5])), &rect([0.4, 0.6, 0.5, 0.7]));
+        let face = union(&rect([0.15, 0.15, 0.35, 0.35]), &rect([0.65, 0.15, 0.85, 0.35]));
+        let found = Found { hair: Some(&hair), clothes: Some(&clothes), skin: Some(&skin), face: Some(&face) };
+        let hair_only = compose(ann, &found, &[Part::Hair]);
         assert!(selected(&hair_only, 0.15, 0.3), "Ann's hair");
         assert!(!selected(&hair_only, 0.6, 0.3), "not where it lies on Ben");
         assert!(!selected(&hair_only, 0.75, 0.12), "not Ben's hair");
-        assert!(!selected(&hair_only, 0.25, 0.45), "not her skin");
-        let clothes_only = compose(ann, Some(&hair), Some(&clothes), &[Part::Clothes]);
+        let clothes_only = compose(ann, &found, &[Part::Clothes]);
         assert!(selected(&clothes_only, 0.25, 0.8) && !selected(&clothes_only, 0.75, 0.8));
-        // Skin: Ann without her hair and clothes (her face below the hairline, her neck)
-        let skin = compose(ann, Some(&hair), Some(&clothes), &[Part::Skin]);
-        assert!(selected(&skin, 0.25, 0.45) && selected(&skin, 0.07, 0.2));
-        assert!(!selected(&skin, 0.25, 0.3) && !selected(&skin, 0.25, 0.8) && !selected(&skin, 0.75, 0.45));
-        // the parts add up: hair + skin + clothes is the whole of Ann, and nothing of Ben
-        let all = compose(ann, Some(&hair), Some(&clothes), &[Part::Hair, Part::Skin, Part::Clothes]);
-        let whole = compose(ann, Some(&hair), Some(&clothes), &[Part::Person]);
+        // Face Skin: her face only; Body Skin: her neck, not her face, not Ben's hand on her
+        let face_skin = compose(ann, &found, &[Part::FaceSkin]);
+        assert!(selected(&face_skin, 0.25, 0.25) && !selected(&face_skin, 0.25, 0.45) && !selected(&face_skin, 0.75, 0.25));
+        let body_skin = compose(ann, &found, &[Part::BodySkin]);
+        assert!(selected(&body_skin, 0.25, 0.45) && !selected(&body_skin, 0.25, 0.25) && !selected(&body_skin, 0.75, 0.45));
+        assert!(selected(&body_skin, 0.42, 0.65), "a hand inside her outline counts as hers (the person mask decides)");
+        // both skins without a face detection: all of her skin
+        let skin_only = Found { skin: Some(&skin), ..Default::default() };
+        let both = compose(ann, &skin_only, &[Part::FaceSkin, Part::BodySkin]);
+        assert!(selected(&both, 0.25, 0.25) && selected(&both, 0.25, 0.45) && !selected(&both, 0.75, 0.25));
+        // the person is everything, whatever else is asked for
+        let all = compose(ann, &found, &[Part::Hair, Part::Person]);
         for (x, y) in [(0.25, 0.3), (0.25, 0.45), (0.25, 0.8), (0.75, 0.45), (0.6, 0.3)] {
-            assert_eq!(selected(&all, x, y), selected(&whole, x, y), "({x}, {y})");
-            assert_eq!(selected(&whole, x, y), selected(ann, x, y));
+            assert_eq!(selected(&all, x, y), selected(ann, x, y), "({x}, {y})");
         }
     }
 
     #[test]
     fn a_part_nobody_has_selects_nothing_and_takes_nothing_away() {
         let ann = rect(ANN);
-        let hair = compose(&ann, None, None, &[Part::Hair]);
-        assert!(!selects_anything(&hair));
-        assert_eq!(compose(&ann, None, None, &[Part::Skin]), ann);
-        assert!(selects_anything(&compose(&ann, None, None, &[Part::Hair, Part::Person])));
+        let none = Found::default();
+        for part in [Part::Hair, Part::Clothes, Part::FaceSkin, Part::BodySkin] {
+            assert!(!selects_anything(&compose(&ann, &none, &[part])), "{part:?}");
+        }
+        // no face found: body skin is all of the skin, face skin none of it
+        let skin = rect([0.1, 0.1, 0.4, 0.5]);
+        let found = Found { skin: Some(&skin), ..Default::default() };
+        assert!(selected(&compose(&ann, &found, &[Part::BodySkin]), 0.2, 0.2));
+        assert!(!selects_anything(&compose(&ann, &found, &[Part::FaceSkin])));
+        assert!(selects_anything(&compose(&ann, &none, &[Part::Hair, Part::Person])));
     }
 
     #[test]
@@ -283,15 +336,17 @@ mod tests {
         let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(parts_of(&names(&["entire person", "HAIR", "Hair", "clothing"])).unwrap(), [Part::Person, Part::Hair, Part::Clothes]);
         assert_eq!(parts_of(&[]).unwrap(), [Part::Person]);
+        assert_eq!(parts_of(&names(&["Skin", "face skin"])).unwrap(), [Part::FaceSkin, Part::BodySkin], "Skin is both skins");
         let e = parts_of(&names(&["Lips"])).unwrap_err();
-        assert!(e.contains("Lips") && e.contains("Skin"), "{e}");
+        assert!(e.contains("Lips") && e.contains("Face Skin"), "{e}");
         for n in PARTS {
             assert_eq!(Part::parse(n).map(Part::name), Some(n));
         }
-        assert_eq!(needs(&[Part::Person]), (false, false));
-        assert_eq!(needs(&[Part::Hair]), (true, false));
-        assert_eq!(needs(&[Part::Clothes, Part::Person]), (false, true));
-        assert_eq!(needs(&[Part::Skin]), (true, true));
+        assert_eq!(needs(&[Part::Person]), Needs::default());
+        assert_eq!(needs(&[Part::Hair]), Needs { hair: true, ..Default::default() });
+        assert_eq!(needs(&[Part::Clothes, Part::Person]), Needs { clothes: true, ..Default::default() });
+        assert_eq!(needs(&[Part::FaceSkin]), Needs { skin: true, face: true, ..Default::default() });
+        assert_eq!(needs(&[Part::BodySkin, Part::FaceSkin]), Needs { skin: true, ..Default::default() }, "both skins need no face");
     }
 
     #[test]

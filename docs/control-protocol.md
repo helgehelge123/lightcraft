@@ -139,8 +139,8 @@ AI masks (SAM 3) are `mask.add` / `mask.addComponent` with `kind: "object"`, `"p
 `photo.faces {id?}` lists the active photo's face regions → `{faces: [{index, region, name, rect: {x0, y0, x1, y1},
 face: [x0, y0, x1, y1]}]}` (`rect` on the upright photo, as `photo.setRegion` takes it; `face` the same box in mask
 coordinates, after Rotate Left/Right), and `mask.add {kind: "people", person: index, parts: ["Hair", "Skin"]}` (or
-`face: [x0, y0, x1, y1]` instead of `person`; parts from `Entire Person`, `Hair`, `Clothes`, `Skin`, default the entire
-person) makes the mask; `mask.addComponent {op: "subtract", kind: "people", …}` combines one into the selected mask.
+`face: [x0, y0, x1, y1]` instead of `person`; parts from `Entire Person`, `Face Skin`, `Body Skin`, `Hair`, `Clothes`, or `Skin`
+for both skins, default the entire person) makes the mask; `mask.addComponent {op: "subtract", kind: "people", …}` combines one into the selected mask.
 In the app both return `{pending: true}` and the mask appears when the person is found; otherwise a notice says no
 person was found at the face (or none of the parts on them). Without the model the error is `ModelMissing(Sam3)`, as
 for Object and Describe.

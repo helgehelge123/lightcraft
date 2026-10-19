@@ -431,17 +431,20 @@ fn people_logits(m: &mut Sam3, enc: &mut Encoded, face: [f64; 4], parts: &[Part]
     let found = m.instances(enc, "person", people::PERSON_THRESHOLD).map_err(|e| e.to_string())?;
     let cands: Vec<Candidate> = found.into_iter().map(|i| Candidate { logits: i.logits, score: i.score, bbox: i.bbox }).collect();
     let Some(person) = people::pick_person(&cands, side, face).and_then(|i| cands.get(i)) else { return Ok(None) };
-    let (hair, clothes) = people::needs(parts);
+    let needs = people::needs(parts);
     let mut detect = |want: bool, text: &str| -> Result<Option<Vec<f32>>, String> {
         if !want {
             return Ok(None);
         }
         Ok(m.segment_text(enc, text, people::PART_THRESHOLD).map_err(|e| e.to_string())?.map(|p| p.logits))
     };
-    let hair = detect(hair, people::HAIR_PROMPT)?;
-    let clothes = detect(clothes, people::CLOTHES_PROMPT)?;
+    let hair = detect(needs.hair, people::HAIR_PROMPT)?;
+    let clothes = detect(needs.clothes, people::CLOTHES_PROMPT)?;
+    let skin = detect(needs.skin, people::SKIN_PROMPT)?;
+    let face = detect(needs.face, people::FACE_PROMPT)?;
     log::info!("SAM 3 people ({} candidates) in {:?}", cands.len(), t.elapsed());
-    Ok(Some(people::compose(&person.logits, hair.as_deref(), clothes.as_deref(), parts)))
+    let found = people::Found { hair: hair.as_deref(), clothes: clothes.as_deref(), skin: skin.as_deref(), face: face.as_deref() };
+    Ok(Some(people::compose(&person.logits, &found, parts)))
 }
 
 #[cfg(test)]

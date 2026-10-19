@@ -32,8 +32,10 @@ In the Masking panel (M):
 
 A People mask selects parts of **one person**, picked by their face: the photo's face regions
 (from XMP, drawn by hand or found by Photo ▸ Detect Faces; `photo.faces` lists them). The parts
-are **Entire Person**, **Hair**, **Clothes** and **Skin**, any combination (their union). The
-Masking panel's People menu is not there yet; agents and scripts use `mask.add` /
+are **Entire Person**, **Face Skin**, **Body Skin**, **Hair** and **Clothes**, any combination
+(their union; `Skin` names both skins). In the Masking panel: the **People** tile (or + / − ▸
+People…) lists the photo's faces (a name, else Person 1, 2…), ticks the parts and makes the mask
+or component; a photo without faces offers Detect Faces. Agents and scripts use `mask.add` /
 `mask.addComponent` (below).
 
 How the person is found, in one pass over the analyzed photo:
@@ -42,11 +44,12 @@ How the person is found, in one pass over the analyzed photo:
    there). The person is the best-scoring instance whose mask covers the centre of the face box;
    failing that, the one whose box holds the centre and most of the face. Nobody there: no mask,
    and the message "No person was found at this face."
-2. Only the detections the parts need run: `hair` for Hair and Skin, `clothes` for Clothes and
-   Skin (instances above 0.5, as Describe), each cut to the chosen person, so a neighbour's hair
-   or coat stays out.
-3. **Skin is an approximation**: the person without their hair and their clothes (SAM 3 has no
-   skin concept). Glasses, jewellery, a bag or anything else that is neither stays in it.
+2. Only the detections the parts need run (instances above 0.5, as Describe): `hair`, `clothes`,
+   `skin`, and `face` only to split face skin from body skin when just one of them is asked for.
+   Each is cut to the chosen person, so a neighbour's hair, coat or hand stays out.
+3. Skin is SAM 3's own `skin` concept: knee pads, socks, shoes and a ball in their hands stay out.
+   **Face Skin** is the skin inside the `face` detection, **Body Skin** the rest; eyes and lips
+   are still part of the face skin.
 
 Logits combine like fuzzy sets (union = maximum, intersection = minimum, "without" = minimum with
 the negated logit), so the edges stay as soft as the model's. The result is stored like Describe's
@@ -56,9 +59,8 @@ renders without the model. A People shape without a selection (written before th
 keeps the old behaviour: the photo's own person / skin / hair / teeth / glasses mattes when it
 carries them (DNG semantic masks, e.g. iPhone ProRAW), else the subject heuristic.
 
-Not yet (step 2): the Masking panel's People menu (a card per face, part check boxes); Lightroom's
-finer parts (Face Skin and Body Skin, Eyebrows, Eyes, Lips, Teeth, Facial Hair), which need a
-face-parsing pass on a zoomed crop of the face; people without a face region (picking from SAM 3's
+Not yet (step 2): Lightroom's finer parts (Eyebrows, Eye Sclera, Iris and Pupil, Lips, Teeth,
+Facial Hair, and face skin without eyes and lips), which need a face-parsing pass on a zoomed crop of the face; people without a face region (picking from SAM 3's
 `person` instances directly); People with the remote worker (its protocol returns one merged mask,
 not the instances, so it answers with an error for now).
 
@@ -216,7 +218,7 @@ Therefore:
 |---|---|---|
 | `mask.add` | `{kind: "object", points?: [[x,y],…], exclude?: [[x,y],…], seg?}` | an Object mask (empty until clicked) |
 | `mask.add` | `{kind: "prompt", text, seg?}` | a Describe mask |
-| `mask.add` | `{kind: "people", person?: index, face?: [x0,y0,x1,y1], parts?: [name, …], seg?}` | a People mask (`person` or `face` needed; `parts` from Entire Person, Hair, Clothes, Skin, case-insensitive, default the entire person) |
+| `mask.add` | `{kind: "people", person?: index, face?: [x0,y0,x1,y1], parts?: [name, …], seg?}` | a People mask (`person` or `face` needed; `parts` from Entire Person, Face Skin, Body Skin, Hair, Clothes, or Skin for both skins, case-insensitive, default the entire person) |
 | `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt"\|"people", …}` | the same as a component |
 | `photo.faces` | `{id?}` | the photo's faces → `{faces: [{index, region, name, rect, face}]}` (`index` = `person`; `face` = the box in mask coordinates) |
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |

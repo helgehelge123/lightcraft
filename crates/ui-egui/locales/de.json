@@ -2348,7 +2348,8 @@
   "Choose who to keep": "Wähle, wer bleiben soll",
   "No faces found in this photo.": "In diesem Foto wurden keine Gesichter gefunden.",
   "Entire Person": "Ganze Person",
-  "Skin": "Haut",
+  "Face Skin": "Gesichtshaut",
+  "Body Skin": "Körperhaut",
   "Hair": "Haare",
   "Clothes": "Kleidung",
   "Create Mask": "Maske erstellen"

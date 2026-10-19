@@ -322,7 +322,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt|people, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; people: person (index into photo.faces) or face [x0,y0,x1,y1], parts? [Entire Person|Hair|Clothes|Skin] (default the entire person); object/prompt/people: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt or people mask returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt|people, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; people: person (index into photo.faces) or face [x0,y0,x1,y1], parts? [Entire Person|Face Skin|Body Skin|Hair|Clothes, or Skin for both skins] (default the entire person); object/prompt/people: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt or people mask returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();

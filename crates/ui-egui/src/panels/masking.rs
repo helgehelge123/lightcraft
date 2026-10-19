@@ -782,11 +782,11 @@ pub(crate) fn start_people(app: &mut LightcraftApp, op: &str) {
 /// The chooser with the entire person ticked (the model is installed, or being asked for).
 fn open_people(app: &mut LightcraftApp, op: &str) {
     app.ui.describe = None;
-    app.ui.people = Some(PeopleChoice { op: op.to_string(), person: 0, parts: [true, false, false, false] });
+    app.ui.people = Some(PeopleChoice { op: op.to_string(), person: 0, parts: [true, false, false, false, false] });
 }
 
 /// The parts a People mask selects, in the order the chooser lists them (as `mask.add` names them).
-const PEOPLE_PARTS: [&str; 4] = ["Entire Person", "Skin", "Hair", "Clothes"];
+const PEOPLE_PARTS: [&str; 5] = ["Entire Person", "Face Skin", "Body Skin", "Hair", "Clothes"];
 
 /// The People chooser: the photo's faces (a name, else "Person 1", "Person 2"…), the parts to
 /// select, and the button that makes the mask.

@@ -622,12 +622,12 @@ pub enum KeywordChips {
 
 /// What the People chooser has picked: how the mask combines (`new`, or `add` / `subtract` /
 /// `intersect` on the selected one), the face (its index in `photo.faces`) and the parts ticked
-/// (Entire Person, Skin, Hair, Clothes, in that order).
+/// (Entire Person, Face Skin, Body Skin, Hair, Clothes, in that order).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeopleChoice {
     pub op: String,
     pub person: usize,
-    pub parts: [bool; 4],
+    pub parts: [bool; 5],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

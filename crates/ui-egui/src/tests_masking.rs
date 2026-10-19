@@ -1731,7 +1731,7 @@ fn the_people_chooser_lists_faces_and_parts() {
     // (no model folder: nothing to offer, the chooser opens and a request says what's missing)
     h.app.session.segmenter.dir = None;
     click(&mut h, "maskNew:people");
-    assert_eq!(h.app.ui.people, Some(PeopleChoice { op: "new".into(), person: 0, parts: [true, false, false, false] }));
+    assert_eq!(h.app.ui.people, Some(PeopleChoice { op: "new".into(), person: 0, parts: [true, false, false, false, false] }));
     assert!(h.app.widgets.iter().any(|(w, _)| w == "button:maskPeopleDetect"), "no faces: Detect Faces is offered");
     set_faces(&mut h, vec![face(0.1, Some("Ana Lima")), face(0.6, None)]);
     h.step();
@@ -1739,8 +1739,8 @@ fn the_people_chooser_lists_faces_and_parts() {
     assert!(h.app.widgets.iter().any(|(w, _)| w == "maskPerson:0") && h.app.widgets.iter().any(|(w, _)| w == "maskPerson:1"));
     assert!(!h.app.widgets.iter().any(|(w, _)| w == "button:maskPeopleDetect"));
     click(&mut h, "maskPerson:1");
-    click(&mut h, "check:maskPeoplePart2");
-    assert_eq!(h.app.ui.people, Some(PeopleChoice { op: "new".into(), person: 1, parts: [true, false, true, false] }));
+    click(&mut h, "check:maskPeoplePart3");
+    assert_eq!(h.app.ui.people, Some(PeopleChoice { op: "new".into(), person: 1, parts: [true, false, false, true, false] }));
     assert!(develop(&h).masks.is_empty(), "nothing is made before the button");
     click(&mut h, "button:maskPeopleCancel");
     assert_eq!(h.app.ui.people, None);
