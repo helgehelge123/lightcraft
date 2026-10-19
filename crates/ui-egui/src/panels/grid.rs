@@ -1035,7 +1035,18 @@ pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid:
     paint(p, Rect::from_min_size(br.min + vec2(6.0, 3.0), vec2(14.0, 14.0)), Icon::Stack, Color32::WHITE);
     p.galley(pos2(br.min.x + 24.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
     if resp.clicked() {
-        let _ = app.run("stack.toggle", json!({"ids": [id.0]}));
+        toggle_stack(app, ui.ctx(), id);
+    }
+}
+
+/// A click on a stack badge (grid or filmstrip): expand / collapse that photo's stack. The
+/// photo is selected first when it isn't, as `stack.toggle` acts on a selected stack.
+pub fn toggle_stack(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
+    if !app.session.selection.contains(id) {
+        let _ = app.run("library.select", json!({"ids": [id.0]}));
+    }
+    if let Err(e) = app.run("stack.toggle", json!({"ids": [id.0]})) {
+        app.toast(ctx, e);
     }
 }
 

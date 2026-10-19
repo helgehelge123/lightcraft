@@ -2643,13 +2643,26 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     film_badges(p, &t, fr, ph);
                 }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
+                    let collapsed = st.collapsed;
                     let text =
-                        if st.collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
+                        if collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
                     let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
                     let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
-                    p.rect_filled(br, 7.5, Color32::from_black_alpha(170));
+                    // like the grid's badge: a click expands / collapses the stack
+                    let badge = ui.interact(br, egui::Id::new(("film-stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
+                        "Stack — click to expand"
+                    } else {
+                        "Stack — click to collapse"
+                    });
+                    register(ui.ctx(), format!("filmstack:{}", id.0), br);
+                    let p = ui.painter();
+                    let fill = if badge.hovered() { Color32::from_black_alpha(230) } else { Color32::from_black_alpha(170) };
+                    p.rect_filled(br, 7.5, fill);
                     crate::icons::paint(p, Rect::from_min_size(br.min + vec2(4.0, 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Stack, Color32::WHITE);
                     p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+                    if badge.clicked() {
+                        super::grid::toggle_stack(app, ui.ctx(), *id);
+                    }
                 }
             }
             if resp.clicked() {

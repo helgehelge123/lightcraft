@@ -172,3 +172,21 @@ fn an_unedited_raws_thumbnail_skips_the_sensor_decode() {
     assert!(!skips_the_real_render(false, true));
     assert!(!skips_the_real_render(false, false));
 }
+
+#[test]
+fn grid_stack_badge_toggles_a_stack_that_is_not_selected() {
+    let mut h = grid(ViewMode::PhotoGrid);
+    // a stack on screen, and a loose photo as the active one
+    let top = PhotoId(2001);
+    select(&mut h, top);
+    let vis = h.app.session.visible().to_vec();
+    let i = vis.iter().position(|p| *p == top).unwrap();
+    let loose = vis[i.saturating_sub(1)..].iter().copied().find(|p| h.app.session.catalog.stack_of(*p).is_none()).unwrap();
+    select(&mut h, loose);
+    assert!(!h.app.session.selection.contains(top));
+    assert!(widget(&h, &format!("stack:{}", top.0)).is_some(), "badge drawn");
+    let r = h.request("ui.clickWidget", json!({"id": format!("stack:{}", top.0)}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.catalog.stack_of(top).unwrap().collapsed, "a click on an unselected stack's badge toggles it");
+}
