@@ -36,7 +36,8 @@ fn rawnind_bayer() -> Known {
                      Attribution 4.0 (CC BY 4.0) or the GNU General Public License v3; LightCraft uses them under CC BY 4.0. \
                      You may use them for any purpose, commercial work included. The model is downloaded to your computer at \
                      your request and used by it only. If you pass the model file on, credit the author (RawNIND by Benoit \
-                     Brummer) and name the licence."
+                     Brummer), name the licence with a link to it (creativecommons.org/licenses/by/4.0) and say whether \
+                     you changed the file."
                 .into(),
         },
         source: Some("https://github.com/darktable-org/darktable-ai/tree/master/models/rawdenoise-nind".into()),
