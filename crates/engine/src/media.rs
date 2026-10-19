@@ -565,9 +565,8 @@ impl MediaCache {
         }
     }
 
-    /// The facts of photo `id`'s cached sources: the decoder's when one has them, else `header`
-    /// (with a smart preview's stored camera tone curve).
-    fn source_facts(&self, id: PhotoId, header: SourceInfo) -> SourceInfo {
+    /// Prefer a cached source with decoder facts, preserving thumbnail/preview/full priority.
+    fn cached_source(&self, id: PhotoId) -> Option<&DecodedSource> {
         let cached = || {
             self.thumbs
                 .peek(&id)
@@ -575,7 +574,12 @@ impl MediaCache {
                 .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
                 .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
         };
-        match cached().find(|s| s.info.is_some()).or_else(|| cached().next()) {
+        cached().find(|s| s.info.is_some()).or_else(|| cached().next())
+    }
+
+    /// The decoder's cached facts, else `header` (with a smart preview's stored camera tone curve).
+    fn source_facts(&self, id: PhotoId, header: SourceInfo) -> SourceInfo {
+        match self.cached_source(id) {
             Some(s) => s.info_or(header),
             None => header,
         }
@@ -1631,6 +1635,11 @@ impl crate::Session {
         self.media.source_facts(id, header)
     }
 
+    /// Borrow source mattes for selection notices without constructing render facts each frame.
+    pub fn source_mattes(&self, id: PhotoId) -> Option<&lightcraft_pipeline::masks::Mattes> {
+        self.media.cached_source(id).and_then(|s| s.info.as_ref()).and_then(|info| info.mattes.as_deref())
+    }
+
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
     pub fn source_now(&mut self, id: PhotoId, level: SourceLevel) -> Result<Arc<Rgb32f>, String> {
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
@@ -1796,6 +1805,24 @@ mod thumbnail_hash_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selection_notices_borrow_the_same_mattes_as_render_facts() {
+        let mut session = crate::Session::with_demo();
+        let id = session.active().unwrap();
+        assert!(session.source_mattes(id).is_none());
+        let mattes = std::sync::Arc::new(lightcraft_pipeline::masks::Mattes::default());
+        session.media.insert_source(
+            id,
+            super::SourceLevel::Thumb,
+            super::DecodedSource::new(
+                std::sync::Arc::new(lightcraft_raster::Rgb32f::new(8, 8)),
+                Some(lightcraft_pipeline::SourceInfo { mattes: Some(mattes.clone()), ..Default::default() }),
+            ),
+        );
+        assert!(std::ptr::eq(session.source_mattes(id).unwrap(), mattes.as_ref()));
+        assert!(std::sync::Arc::ptr_eq(session.source_info(id).mattes.as_ref().unwrap(), &mattes));
+    }
+
     use super::*;
 
     #[test]

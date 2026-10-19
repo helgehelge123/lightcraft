@@ -92,6 +92,17 @@ impl Mattes {
     }
 }
 
+/// Whether automatic selection is a classical approximation rather than a stored model result
+/// or source matte. Frontends should make this visible instead of implying AI segmentation.
+pub fn approximate_selection(shape: &MaskShape, mattes: Option<&Mattes>) -> bool {
+    match shape {
+        MaskShape::Background => approximate_selection(&MaskShape::Subject, mattes),
+        MaskShape::Sky | MaskShape::Subject | MaskShape::People { .. } => mattes.is_none_or(|m| m.for_shape(shape).is_empty()),
+        MaskShape::Object { hint, seg, detail, .. } => !hint.is_empty() && seg.is_none() && detail.is_empty(),
+        _ => false,
+    }
+}
+
 pub struct Evaluated {
     /// The mask's id ([`Mask::id`]).
     pub id: u32,
@@ -693,6 +704,21 @@ mod tests {
 
     fn frame(w: usize, h: usize) -> Frame {
         Frame::new(w, h, &DevelopSettings::default(), true)
+    }
+
+    #[test]
+    fn selection_provenance_distinguishes_heuristics_mattes_and_model_results() {
+        assert!(approximate_selection(&MaskShape::Sky, None));
+        assert!(approximate_selection(&MaskShape::Background, None));
+        let mut m = Mattes::default();
+        m.push(MatteKind::Sky, Image::filled(2, 2, 255));
+        assert!(!approximate_selection(&MaskShape::Sky, Some(&m)));
+        assert!(approximate_selection(&MaskShape::Subject, Some(&m)));
+        m.push(MatteKind::Person, Image::filled(2, 2, 255));
+        assert!(!approximate_selection(&MaskShape::Background, Some(&m)));
+        let seg = SegMask::from_logits(2, &[8.0, -8.0, 8.0, -8.0]);
+        let shape = MaskShape::Object { hint: vec![Point::new(0.2, 0.5)], exclude: vec![], seg: Some(seg), detail: vec![], edge: 0.0 };
+        assert!(!approximate_selection(&shape, None));
     }
 
     #[test]

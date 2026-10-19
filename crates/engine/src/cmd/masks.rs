@@ -52,6 +52,29 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
     })
 }
 
+/// New Sky selections use the same stored model result as Describe. Old `MaskShape::Sky`
+/// values retain their existing source-matte/heuristic rendering when reopened.
+fn new_shape(s: &Session, kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
+    if kind != "sky" {
+        return shape_from(kind, p, c);
+    }
+    let ai = match p.get("ai") {
+        None => s.segmenter.installed() || s.segmenter.remote_endpoint().is_some(),
+        Some(v) => v.as_bool().ok_or_else(|| bad(c, "ai must be true or false"))?,
+    };
+    let seg = match p.get("seg") {
+        None => None,
+        Some(v) => {
+            let seg: lightcraft_develop::SegMask = serde_json::from_value(v.clone()).map_err(|e| bad(c, format!("invalid sky segmentation: {e}")))?;
+            if seg.bounds().is_none() || seg.logits().is_none() {
+                return Err(bad(c, "invalid sky segmentation data"));
+            }
+            Some(seg)
+        }
+    };
+    if ai || seg.is_some() { Ok(MaskShape::Prompt { text: "sky".into(), seg, detail: vec![], edge: 0.0 }) } else { Ok(MaskShape::Sky) }
+}
+
 /// `[[x, y], …]` normalized points under `key`.
 fn points(p: &Value, key: &str) -> Vec<Point> {
     p.get(key)
@@ -214,13 +237,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; sky: ai? (auto when installed; false keeps the approximate/source-matte selection); prompt: text; object/prompt/sky: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let mut shape = shape_from(&kind, p, "mask.add")?;
+                let mut shape = new_shape(s, &kind, p, "mask.add")?;
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
-                let name = str_param(p, "name").map(str::to_string);
+                let name = str_param(p, "name").map(str::to_string).or_else(|| (kind == "sky").then(|| "Sky".into()));
                 if let Later::Text(text) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
                     segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
@@ -248,7 +271,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add/Subtract/Intersect Mask",
             [],
             None,
-            "{id?: maskId, op: add|subtract|intersect, kind, ...shape params}",
+            "{id?: maskId, op: add|subtract|intersect, kind, ...shape params (sky: ai?, seg?)}",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("brush").to_string();
@@ -260,7 +283,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
-                let mut shape = shape_from(&kind, p, "mask.addComponent")?;
+                let mut shape = new_shape(s, &kind, p, "mask.addComponent")?;
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
