@@ -8,6 +8,8 @@
 //! - **Fill** (content-aware) rebuilds the spot from patches of its surroundings instead of one
 //!   source: PatchMatch-based completion ([`lightcraft_inpaint::complete`]), coarse to fine, so the
 //!   structure is chosen at a scale set by the spot's size (the same at preview and export size).
+//!   It reads patches from around the spot as far again as the spot is wide, replaces everything
+//!   under the brush and feathers outside it (so the edge of what is removed doesn't show through).
 //!   Deterministic; the source offset is ignored.
 
 use lightcraft_develop::{Spot, SpotMode};
@@ -189,8 +191,11 @@ pub fn window_for_reads_checked(
             for p in &pts {
                 (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
             }
-            // the box `apply` works in: the stroke plus a radius, plus a radius of padding
-            let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
+            // the box `apply` works in: the footprint plus the surroundings it reads (a pixel more
+            // for rounding)
+            let rr = reach(spot, r);
+            let m = rr + read_pad(spot, r, rr, (x1 - x0).max(y1 - y0)) + 1.0;
+            let t = [x0 - m, y0 - m, x1 + m, y1 + m];
             let s = match spot.source_offset {
                 Some(o) => {
                     let b = to_out.apply(o);
@@ -256,17 +261,35 @@ pub fn window_for_reads_checked(
     )
 }
 
+/// How far past its radius a Fill spot's feather reaches, in radii at full feather: Fill replaces
+/// everything under the brush and softens its edge *outside* it, so the edge of what is removed
+/// never shows through the feather.
+const FILL_FEATHER_OUT: f64 = 0.3;
+
+/// The outer radius of a spot's footprint: its radius, and for Fill the feather outside it.
+fn reach(spot: &Spot, r: f64) -> f64 {
+    if spot.mode == SpotMode::Fill { r * (1.0 + FILL_FEATHER_OUT * (spot.feather / 100.0).clamp(0.0, 1.0)) } else { r }
+}
+
+/// The surroundings a spot reads from around its footprint (`reach` past the stroke), in output
+/// pixels. Fill copies patches from them: as much again as the footprint is wide, so even a large
+/// hole is a small part of what it is rebuilt from.
+fn read_pad(spot: &Spot, r: f64, reach: f64, extent: f64) -> f64 {
+    if spot.mode == SpotMode::Fill { (2.0 * r).max(extent + 2.0 * reach) } else { r }
+}
+
 /// Content-aware fill of the box: `src` becomes `tgt` with every pixel under the stroke (`alpha > 0`)
 /// rebuilt from the rest of the box. Falls back to a smooth membrane fill when the box holds no whole
-/// patch to copy from.
+/// patch to copy from. Patches are compared and blended on the square root of the scene-linear values
+/// (roughly perceptual), so shadows match as well as highlights.
 fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh: usize) {
     let hole: Vec<bool> = alpha.iter().map(|a| *a > 0.0).collect();
-    let flat: Vec<f32> = tgt.iter().flatten().copied().collect();
+    let flat: Vec<f32> = tgt.iter().flatten().map(|v| v.max(0.0).sqrt()).collect();
     let out = lightcraft_inpaint::complete(bw, bh, 3, &flat, &hole, &lightcraft_inpaint::CompleteParams::default())
         .unwrap_or_else(|| lightcraft_inpaint::membrane_fill(bw, bh, 3, &flat, &hole));
     let (pixels, _) = out.as_chunks::<3>();
     for (d, v) in src.iter_mut().zip(pixels) {
-        *d = *v;
+        *d = v.map(|c| c * c);
     }
 }
 
@@ -298,16 +321,16 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             }
             None => auto_source(img, first, r),
         };
-        // Bounding box of the stroke.
+        let rr = reach(spot, r as f64) as f32;
+        // Bounding box of the footprint.
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for p in &pts {
-            x0 = x0.min(p.0 - r);
-            y0 = y0.min(p.1 - r);
-            x1 = x1.max(p.0 + r);
-            y1 = y1.max(p.1 + r);
+            x0 = x0.min(p.0 - rr);
+            y0 = y0.min(p.1 - rr);
+            x1 = x1.max(p.0 + rr);
+            y1 = y1.max(p.1 + rr);
         }
-        // content-aware fill reads the spot's surroundings (the window holds 2 radii around it)
-        let pad = if fill { 2.0 * r } else { r };
+        let pad = read_pad(spot, r as f64, rr as f64, ((x1 - x0).max(y1 - y0) - 2.0 * rr) as f64) as f32;
         let (bx0, by0) = (((x0 - pad).floor().max(0.0)) as usize, ((y0 - pad).floor().max(0.0)) as usize);
         let (bx1, by1) = (((x1 + pad).ceil() as usize).min(w), ((y1 + pad).ceil() as usize).min(h));
         if bx1 <= bx0 || by1 <= by0 {
@@ -320,14 +343,22 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         let mut alpha = vec![0.0f32; bw * bh];
         let mut src = vec![[0.0f32; 3]; bw * bh];
         let mut tgt = vec![[0.0f32; 3]; bw * bh];
+        // Heal and Clone feather inside the radius; Fill replaces all of it and feathers outside
+        let (inner, outer) = if fill { (r, rr) } else { (r * (1.0 - feather * 0.8), r) };
         for y in 0..bh {
             for x in 0..bw {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
-                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
-                let inner = r * (1.0 - feather * 0.8);
-                alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
-                src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
+                if fill {
+                    // the fill writes `src` itself; only the footprint needs a distance
+                    if px < x0 || px > x1 || py < y0 || py > y1 {
+                        continue;
+                    }
+                } else {
+                    src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
+                }
+                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+                alpha[y * bw + x] = (1.0 - smooth(inner, outer, d)) * opacity;
             }
         }
         if fill {
@@ -507,6 +538,18 @@ mod tests {
             }
         }
         assert!(err / n as f32 <= 0.08, "mean difference {}", err / n as f32);
+    }
+
+    #[test]
+    fn fill_leaves_nothing_of_the_blot_under_the_brush() {
+        // a dark disc covered exactly by a feathered Fill spot: none of it shows through the feather
+        let (w, h) = (200, 160);
+        let mut img = Rgb32f::from_fn(w, h, |x, y| if (x as f32 - 100.0).hypot(y as f32 - 80.0) < 20.0 { [0.02; 3] } else { [0.6; 3] });
+        let frame = Frame::new(w, h, &DevelopSettings::default(), true);
+        let spot = Spot { mode: SpotMode::Fill, points: vec![Point::new(0.5, 0.5)], size: 20.0 / 200.0, feather: 100.0, ..Default::default() };
+        apply(&mut img, &[spot], &frame, frame.px_per_long(w));
+        let darkest = img.data.iter().map(|p| p[0]).fold(f32::MAX, f32::min);
+        assert!(darkest > 0.55, "darkest pixel {darkest}");
     }
 
     #[test]
