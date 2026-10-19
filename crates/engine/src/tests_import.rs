@@ -1188,6 +1188,46 @@ fn assisted_culling_measures_photos_side_by_side() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Assisted culling, batched: a subject too small on the thumbnail is measured on the preview,
+/// loaded for that photo only and not kept, and what its decode read is learned (here a raw's
+/// as-shot white, which only the preview-level decode reports).
+#[test]
+fn assisted_culling_measures_a_small_subject_on_a_preview_it_does_not_keep() {
+    use crate::media::SourceLevel;
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    let mut s = Session::new();
+    let scene = lightcraft_scenes::demo_library().swap_remove(0);
+    s.media.file_loader = Some(std::sync::Arc::new(move |_: &str, max_edge: usize| {
+        let preview = max_edge > SourceLevel::Thumb.max_edge();
+        let (w, h) = if preview { (1200, 800) } else { (480, 320) };
+        let info = lightcraft_pipeline::SourceInfo { raw: preview, as_shot_temp: 4986.0, as_shot_tint: -2.0, ..Default::default() };
+        Ok((scene.render(w, h), info))
+    }));
+    // a focus point about 37 px across on the thumbnail (grown by 15 %): measured on the preview
+    let small = lightcraft_geom::Rect { x0: 0.47, y0: 0.45, x1: 0.53, y1: 0.53 };
+    let mut ids = Vec::new();
+    for (i, focus) in [None, Some(small)].into_iter().enumerate() {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("DSC0000{i}.ARW");
+        let mut p = Photo::new(id, Source::File { path: format!("/photos/{name}") }, &name, "ARW", 6000, 4000, "2026-01-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = "SONY ILCE-7M3".into();
+        p.meta.focus = focus.map(|rect| lightcraft_meta::FocusPoint { rect, mode: None, area: None, tracking: None });
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    let r = s.execute("photo.analyze", &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
+    let row = |id: lightcraft_catalog::PhotoId| r["photos"].as_array().unwrap().iter().find(|p| p["id"] == id.0).unwrap().clone();
+    let (plain, subject) = (row(ids[0]), row(ids[1]));
+    assert_eq!((plain["measuredOn"].is_null(), plain["focusOn"].as_str()), (true, Some("frame")), "{r}");
+    assert_eq!((subject["measuredOn"].as_str(), subject["focusOn"].as_str()), (Some("preview"), Some("focusPoint")), "{r}");
+    assert_eq!(subject["sharpness"], subject["subject"], "{r}");
+    assert!(ids.iter().all(|id| s.media.has_source(*id, SourceLevel::Thumb)), "the thumbnails are kept");
+    assert!(!s.media.has_source(ids[1], SourceLevel::Preview), "the preview is not kept");
+    assert_eq!(s.catalog.photo(ids[0]).unwrap().as_shot_wb, None, "no preview, nothing learned");
+    assert_eq!(s.catalog.photo(ids[1]).unwrap().as_shot_wb, Some((4986.0, -2.0)), "learned from the preview's decode");
+}
+
 /// Find Dust Spots: soft dark spots on a smooth sky are found and healed (one undo step).
 #[test]
 fn dust_spots_are_found_and_healed() {
