@@ -1,4 +1,5 @@
 # AI masks (Sky, Object and Describe)
+# AI masks (Object, Describe and People)
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
@@ -8,7 +9,7 @@ decoder, and the rest on the CPU, falling back to the CPU when there is no usabl
 ([Where it runs](#where-it-runs)).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object and Describe offer to download it, every other feature (and every existing mask, see
+Object, Describe and People offer to download it, every other feature (and every existing mask, see
 below) works, and no render, export or command ever waits for it.
 
 ## Using them
@@ -35,6 +36,40 @@ In the Masking panel (M):
   around the selection is analyzed again, zoomed in, from a sharper source (~5 s on an M4 Pro,
   in the background); the result is kept as a high-resolution patch (at most 4 per selection),
   so small objects get 5–10× finer edges than one pass over the whole photo gives.
+
+### People
+
+A People mask selects parts of **one person**, picked by their face: the photo's face regions
+(from XMP, drawn by hand or found by Photo ▸ Detect Faces; `photo.faces` lists them). The parts
+are **Entire Person**, **Hair**, **Clothes** and **Skin**, any combination (their union). The
+Masking panel's People menu is not there yet; agents and scripts use `mask.add` /
+`mask.addComponent` (below).
+
+How the person is found, in one pass over the analyzed photo:
+
+1. SAM 3 detects every `person` (instances scoring above 0.3: the face already says someone is
+   there). The person is the best-scoring instance whose mask covers the centre of the face box;
+   failing that, the one whose box holds the centre and most of the face. Nobody there: no mask,
+   and the message "No person was found at this face."
+2. Only the detections the parts need run: `hair` for Hair and Skin, `clothes` for Clothes and
+   Skin (instances above 0.5, as Describe), each cut to the chosen person, so a neighbour's hair
+   or coat stays out.
+3. **Skin is an approximation**: the person without their hair and their clothes (SAM 3 has no
+   skin concept). Glasses, jewellery, a bag or anything else that is neither stays in it.
+
+Logits combine like fuzzy sets (union = maximum, intersection = minimum, "without" = minimum with
+the negated logit), so the edges stay as soft as the model's. The result is stored like Describe's
+(`seg`, with the face box that picked the person and its index among the photo's faces), gets the
+same Edge setting and zoomed-in detail pass (only when the zoomed region still holds the face), and
+renders without the model. A People shape without a selection (written before this, or by hand)
+keeps the old behaviour: the photo's own person / skin / hair / teeth / glasses mattes when it
+carries them (DNG semantic masks, e.g. iPhone ProRAW), else the subject heuristic.
+
+Not yet (step 2): the Masking panel's People menu (a card per face, part check boxes); Lightroom's
+finer parts (Face Skin and Body Skin, Eyebrows, Eyes, Lips, Teeth, Facial Hair), which need a
+face-parsing pass on a zoomed crop of the face; people without a face region (picking from SAM 3's
+`person` instances directly); People with the remote worker (its protocol returns one merged mask,
+not the instances, so it answers with an error for now).
 
 The first Object or Describe on a photo analyzes it (the image encoder runs once per photo and
 look: ~3 s on an Apple M4 Pro, plus a one-time ~6 s for compiling GPU kernels and loading the
@@ -275,7 +310,9 @@ with kind `sky` without weights. Subject and Background are unchanged.
 |---|---|---|
 | `mask.add` | `{kind: "object", points?: [[x,y],…], exclude?: [[x,y],…], seg?}` | an Object mask (empty until clicked) |
 | `mask.add` | `{kind: "prompt", text, seg?}` | a Describe mask |
-| `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt", …}` | the same as a component |
+| `mask.add` | `{kind: "people", person?: index, face?: [x0,y0,x1,y1], parts?: [name, …], seg?}` | a People mask (`person` or `face` needed; `parts` from Entire Person, Hair, Clothes, Skin, case-insensitive, default the entire person) |
+| `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt"\|"people", …}` | the same as a component |
+| `photo.faces` | `{id?}` | the photo's faces → `{faces: [{index, region, name, rect, face}]}` (`index` = `person`; `face` = the box in mask coordinates) |
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
 | `segment.prepare` | `{}` | load the model and analyze the active photo → `{busy}` |
@@ -300,8 +337,8 @@ installed" that says how to get it.
 
 In the desktop app the commands don't wait for the model: `mask.objectPoint` returns
 `{pending: true}` and the selection is applied when it's computed (one undo step per settled
-selection); `mask.add {kind: "prompt"}` returns `{pending: true}` and the mask appears when
-something is found (or a message says nothing was). `lightcraft-cli` and the headless MCP server
+selection); `mask.add {kind: "prompt"}` and `{kind: "people"}` return `{pending: true}` and the
+mask appears when something is found (or a message says nothing was). `lightcraft-cli` and the headless MCP server
 wait and return the result (when built with the `sam` feature; the default CLI has no AI masks).
 
 ## Implementation notes
@@ -328,6 +365,11 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   encoded photo; the session sends it jobs and receives results over channels, never holding a
   lock the model holds. Each job runs under `catch_unwind`: a panic inside candle becomes an
   error and the model is reloaded on the next request; busy counters are reset by drop guards.
+- People: the pure part of it (picking the person, combining the parts) is
+  `crates/engine/src/segment/people.rs`, tested on synthetic masks without the model;
+  `Sam3::instances` gives the detector's instances one by one. With `LIGHTCRAFT_SAM3_DIR` set,
+  `tests_segment::people_masks_with_the_real_model` runs it end to end (`LIGHTCRAFT_PEOPLE_PHOTO`
+  and `LIGHTCRAFT_PEOPLE_FACE=x0,y0,x1,y1` for a real portrait; the demo photos have no people).
 - Hostile documents: a selection keeps at most 4 detail patches (when read and when rendered),
   each at most 1024² logits; more than 64 clicks are never sent to the model.
 - Accuracy: `crates/segment/tests/reference.rs` compares every stage against the Python

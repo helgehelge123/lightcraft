@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (gap 15: Print Page Options — page numbers, page info, crop marks)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-19 · **Change:** minor (gap 5: People masks with SAM 3, commands only)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -20,6 +20,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 3 B | **Render fidelity unmeasured** (LR-BEHAV-RENDER-FIDELITY): tone, highlights, texture / clarity / dehaze, NR and sharpening are tuned by eye | no side-by-side suite; a retune needs a new process version (only V1 exists) | edits imported from Lightroom look different; the look "isn't Lightroom's" | 30–60 | [raw-parity](raw-parity.md), [process-versions](process-versions.md) |
 | 4 | ~~Original-pixel detail at 100%~~ (LR-VIEW-ZOOM): closed 2026-10-12, see Closed recently | checklist row ✅ | — | 0 | [ui-parity](ui-parity.md) |
 | 5 B | **AI masks: Subject, People, Background, Landscape** remain heuristics; new Sky masks use SAM 3 when configured, with broad quality validation still needed (#377); Object / Describe run SAM 3 but its download has no mirror configured | `crates/segment`; ai-masks.md; MASK rows 67% | masking is how most Lightroom users edit today | 40–70 + model decision | [target-app-parity](target-app-parity.md#ai) |
+| 5 B | **AI masks: Subject, Sky, Background, Landscape** are heuristics; Object / Describe / People run SAM 3 but its download has no mirror configured; People (one person by a face: Entire Person, Hair, Clothes, Skin) has no panel UI or face parts yet | `crates/segment`; ai-masks.md; MASK rows 72% | masking is how most Lightroom users edit today | 40–70 + model decision | [target-app-parity](target-app-parity.md#ai) |
 | 6 B | **Compressed ORF** (every Olympus / OM body since ~2008) | measured: 66 of 78 Olympus / OM models preview-only; `orf.rs` refuses; OM bucket 3% of photographers, 3% of them fully work | +2.6 points; best gain per hour of any raw gap (~0.2) | 8–15 | [raw-parity](raw-parity.md#compressed-orf-a-clean-room-starting-point) (the two Olympus patents that describe the method) |
 | 7 | **Nikon High Efficiency NEF** (HE / HE★ on Z 8, Z 9, Z 6III, Z f, Z50II, Z5II when set to HE) | named and preview only (#193); needs a pure-Rust JPEG XS decoder | +1.1 points (only shots taken in HE; lossless works on the same bodies); low gain per hour (~0.04), so not a beta blocker | 20–40 | [raw-parity](raw-parity.md) |
 | 8 B | **No lens profile database** (LR-EDIT-OPTICS-PROFILE): only DNG opcodes, RW2 in-file distortion, Sony ILCE-7RM4A and ILCE-7RM6 distortion (`docs/sony-ilce7rm6-lens-corrections.md`) and Nikon Z 6II / Z 8 / Z f distortion (`docs/nikon-lens-corrections.md`) | Adobe ships 3,635 lens profiles; we never use them | distortion / vignetting correction is a default step for many | 40–80 + calibration shots | [raw-parity](raw-parity.md#lens-profiles) |
@@ -78,6 +79,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-12 | minor | Gap 5: model-backed Sky creation reuses stored Describe results; broader semantic-mask quality, model distribution and other mask types remain open |
+| 2026-10-19 | minor | Gap 5 shrinks: People masks select one person by a face region with SAM 3 (Entire Person, Hair, Clothes, Skin; commands only); the panel UI and face parts remain |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
