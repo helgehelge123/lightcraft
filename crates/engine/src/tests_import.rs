@@ -984,6 +984,69 @@ fn assisted_culling_stacks_each_burst_best_on_top() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Assisted culling measures photos side by side, in batches (several here): every score is what
+/// the photo's own thumbnail-level source measures to when decoded alone, the order of the ids
+/// changes nothing, a photo whose file is gone is reported failed while the others are measured,
+/// and the decoded thumbnails are kept, as a pass over one photo at a time kept them.
+#[test]
+fn assisted_culling_measures_photos_side_by_side() {
+    use lightcraft_catalog::Op;
+    let dir = temp_dir("cull-parallel");
+    let scenes = lightcraft_scenes::demo_library();
+    // look-alike pairs one second apart (bursts; every file a little larger, so none is a
+    // duplicate), a minute between pairs, and a last photo alone
+    let pairs = rayon::current_num_threads() + 2;
+    for i in 0..2 * pairs + 1 {
+        let img = scenes[(i / 2) % scenes.len()].render(240 + 2 * i, 160 + i);
+        let data: Vec<[u8; 4]> = img
+            .data
+            .iter()
+            .map(|c| {
+                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                [e(c[0]), e(c[1]), e(c[2]), 255]
+            })
+            .collect();
+        let png = lightcraft_codecs::encode_png(
+            &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+            &Default::default(),
+        )
+        .unwrap();
+        std::fs::write(dir.join(format!("p{i:03}.png")), png).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    assert_eq!(ids.len(), 2 * pairs + 1, "{r}");
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    for i in 0..2 * pairs + 1 {
+        let id = by_name(&s, &format!("p{i:03}.png"));
+        let t = 60 * (i / 2) + i % 2;
+        s.commit("t", Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:{:02}:{:02}", t / 60, t % 60)) }).unwrap();
+    }
+    let gone = by_name(&s, &format!("p{:03}.png", 2 * pairs));
+    std::fs::remove_file(dir.join(format!("p{:03}.png", 2 * pairs))).unwrap();
+    s.media.clear_sources();
+    let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["groups"], pairs, "{r}");
+    assert_eq!(r["failed"].as_array().map(|f| f.iter().map(|e| e[0].clone()).collect::<Vec<_>>()), Some(vec![json!(gone.0)]), "{r}");
+    let photos = r["photos"].as_array().unwrap().clone();
+    assert_eq!(photos.len(), 2 * pairs);
+    let measured: Vec<lightcraft_catalog::PhotoId> = photos.iter().map(|p| lightcraft_catalog::PhotoId(p["id"].as_u64().unwrap())).collect();
+    assert!(measured.iter().all(|id| s.media.has_source(*id, crate::media::SourceLevel::Thumb)), "the thumbnails are kept");
+    // the same photos in reverse: the same result
+    let rev: Vec<u64> = ids.iter().rev().copied().collect();
+    let again = s.execute("photo.analyze", &json!({"ids": rev})).unwrap();
+    assert_eq!((&again["photos"], &again["groups"], &again["failed"]), (&r["photos"], &r["groups"], &r["failed"]));
+    // each photo decoded and measured alone
+    s.media.clear_sources();
+    for p in &photos {
+        let src = s.source_now(lightcraft_catalog::PhotoId(p["id"].as_u64().unwrap()), crate::media::SourceLevel::Thumb).unwrap();
+        let frame = (lightcraft_pipeline::cull::sharpness(&src) * 10.0).round() / 10.0;
+        assert_eq!((json!(frame), json!(lightcraft_pipeline::cull::clipped(&src))), (p["frame"].clone(), p["clipped"].clone()), "{p}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Find Dust Spots: soft dark spots on a smooth sky are found and healed (one undo step).
 #[test]
 fn dust_spots_are_found_and_healed() {
