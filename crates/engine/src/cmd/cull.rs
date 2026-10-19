@@ -69,10 +69,13 @@ fn subject_boxes(p: &lightcraft_catalog::Photo) -> (Vec<Rect>, FocusOn) {
 }
 
 /// Focus on the photo's subject: the boxes' scores averaged by area, so the prominent faces of a
-/// group count most. A box too small on the thumbnail is measured on the preview source, loaded
-/// once and only when some box needs it (and the photo has more pixels than the thumbnail).
-/// `None` when nothing could be scored.
-fn subject_focus(s: &mut Session, id: PhotoId, thumb: &Rgb32f, boxes: &[Rect]) -> Option<f32> {
+/// group count most, and whether they were measured on the preview. All boxes of a photo are
+/// measured on one source: the preview when some box is too small on the thumbnail (loaded once,
+/// and only when the photo has more pixels than the thumbnail), else the thumbnail; if no box can
+/// be scored on the preview, all of them are tried on the thumbnail. A score's scale depends on
+/// the source (a preview shows finer detail), so scores from different sources are not compared
+/// (see `analyze`). `None` when nothing could be scored.
+fn subject_focus(s: &mut Session, id: PhotoId, thumb: &Rgb32f, boxes: &[Rect]) -> Option<(f32, bool)> {
     use lightcraft_pipeline::cull;
     let full_edge = s.catalog.photo(id).map_or(0, |p| p.width.max(p.height) as usize);
     let small = |r: &Rect| cull::subject_px(thumb, r) < SUBJECT_MIN_PX;
@@ -81,17 +84,18 @@ fn subject_focus(s: &mut Session, id: PhotoId, thumb: &Rgb32f, boxes: &[Rect]) -
     } else {
         None
     };
-    let (mut sum, mut weight) = (0.0f64, 0.0f64);
-    for r in boxes {
-        let on_preview = if small(r) { preview.as_deref() } else { None };
-        let score = cull::sharpness_in(on_preview.unwrap_or(thumb), r).or_else(|| on_preview.and_then(|_| cull::sharpness_in(thumb, r)));
-        if let Some(v) = score.filter(|v| v.is_finite()) {
-            let w = ((r.x1 - r.x0) * (r.y1 - r.y0)).max(f64::MIN_POSITIVE);
-            sum += f64::from(v) * w;
-            weight += w;
+    let on = |img: &Rgb32f| -> Option<f32> {
+        let (mut sum, mut weight) = (0.0f64, 0.0f64);
+        for r in boxes {
+            if let Some(v) = cull::sharpness_in(img, r).filter(|v| v.is_finite()) {
+                let w = ((r.x1 - r.x0) * (r.y1 - r.y0)).max(f64::MIN_POSITIVE);
+                sum += f64::from(v) * w;
+                weight += w;
+            }
         }
-    }
-    (weight > 0.0).then(|| (sum / weight) as f32)
+        (weight > 0.0).then(|| (sum / weight) as f32)
+    };
+    preview.as_deref().and_then(|pv| on(pv).map(|v| (v, true))).or_else(|| on(thumb).map(|v| (v, false)))
 }
 
 /// What one photo measured to.
@@ -103,6 +107,8 @@ struct Row {
     /// Focus of the whole frame.
     frame: f32,
     subject: Option<f32>,
+    /// The subject was measured on the preview (else on the thumbnail).
+    on_preview: bool,
     focus_on: FocusOn,
     clip: f32,
     sig: [f32; 64],
@@ -129,7 +135,8 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
                     None => (None, Vec::new(), FocusOn::Frame),
                 };
                 let frame = cull::sharpness(&src);
-                let subject = if boxes.is_empty() { None } else { subject_focus(s, id, &src, &boxes) };
+                let measured = if boxes.is_empty() { None } else { subject_focus(s, id, &src, &boxes) };
+                let (subject, on_preview) = (measured.map(|m| m.0), measured.is_some_and(|m| m.1));
                 let focus_on = if subject.is_some() { kind } else { FocusOn::Frame };
                 rows.push(Row {
                     id,
@@ -137,6 +144,7 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
                     sharp: subject.unwrap_or(frame),
                     frame,
                     subject,
+                    on_preview,
                     focus_on,
                     clip: cull::clipped(&src),
                     sig: cull::signature(&src),
@@ -160,20 +168,23 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             group_of[i] = Some(g);
         }
     }
-    // a group's best is its sharpest on the subject when every shot has one measured (the same
-    // thing is compared); when only some do (a face the detector missed, a turned head) the
-    // whole frames are compared instead, so a subject score is never set against a frame score
-    let mut on_subject: std::collections::HashMap<u32, bool> = Default::default();
+    // a group's best is its sharpest on the subject when every shot has one measured on the same
+    // source (the same thing at the same scale is compared); when only some do (a face the
+    // detector missed, a turned head) or a subject straddles the thumbnail / preview limit within
+    // the burst, the whole frames are compared instead, so unlike scores are never set against
+    // each other
+    let mut on_subject: std::collections::HashMap<u32, (bool, Option<bool>)> = Default::default();
     for (i, g) in group_of.iter().enumerate() {
-        if let Some(g) = g {
-            let all = on_subject.entry(*g).or_insert(true);
-            *all &= rows[i].subject.is_some();
+        if let (Some(g), Some(r)) = (g, rows.get(i)) {
+            let (all, level) = on_subject.entry(*g).or_insert((true, None));
+            *all &= r.subject.is_some() && level.is_none_or(|l| l == r.on_preview);
+            *level = Some(r.on_preview);
         }
     }
     let mut best: std::collections::HashMap<u32, (usize, f32)> = Default::default();
     for (i, g) in group_of.iter().enumerate() {
         if let Some(g) = g {
-            let score = if on_subject.get(g).copied().unwrap_or(false) { rows[i].sharp } else { rows[i].frame };
+            let score = if on_subject.get(g).is_some_and(|o| o.0) { rows[i].sharp } else { rows[i].frame };
             let e = best.entry(*g).or_insert((i, -1.0));
             if score > e.1 {
                 *e = (i, score);
@@ -210,6 +221,7 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             "sharpness": one(r.sharp),
             "subject": r.subject.map(one),
             "focusOn": r.focus_on.id(),
+            "measuredOn": r.subject.map(|_| if r.on_preview { "preview" } else { "thumbnail" }),
             "frame": one(r.frame),
             "clipped": r.clip,
             "group": g,
@@ -288,7 +300,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step. Focus is measured on the subject where one is known — the photo's face and pet regions (run `faces.detect` first), else the camera's focus point — and on the whole frame (its sharpest areas) otherwise; `sharpness` is the score used, so `rejectBelow`, the best of a group and the `sharpness` / `bestOfGroup` rules go by the subject (a group whose shots don't all have a subject score is compared on the frames) → {photos: [{id, sharpness, subject (null when not measured), focusOn: \"face\"|\"focusPoint\"|\"frame\", frame, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step. Focus is measured on the subject where one is known — the photo's face and pet regions (run `faces.detect` first), else the camera's focus point — and on the whole frame (its sharpest areas) otherwise; `sharpness` is the score used, so `rejectBelow`, the best of a group and the `sharpness` / `bestOfGroup` rules go by the subject (a group whose shots don't all have a subject score measured on the same source — thumbnail, or the preview for a small subject — is compared on the frames) → {photos: [{id, sharpness, subject (null when not measured), focusOn: \"face\"|\"focusPoint\"|\"frame\", measuredOn: \"thumbnail\"|\"preview\"|null, frame, clipped, group, best}], groups, rejected, picked}",
             always,
             analyze
         ),

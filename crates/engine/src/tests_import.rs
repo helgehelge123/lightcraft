@@ -1040,6 +1040,91 @@ fn assisted_culling_measures_focus_on_the_subject() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Assisted culling: a subject too small on the thumbnail is measured on the preview, and a burst
+/// whose subjects were measured on different sources is ranked on the frames, so a preview score
+/// (finer detail, another scale) is never set against a thumbnail score (#2276).
+#[test]
+fn assisted_culling_never_ranks_subject_scores_from_different_sources() {
+    use lightcraft_catalog::Op;
+    let dir = temp_dir("cull-subject-levels");
+    let (w, h) = (1200usize, 800usize);
+    let mut sharp = lightcraft_scenes::demo_library()[0].render(w, h);
+    for (i, px) in sharp.data.iter_mut().enumerate() {
+        let n = ((i as u32).wrapping_mul(2_654_435_761) >> 24) as f32 / 255.0 - 0.5;
+        *px = px.map(|v| (v + 0.12 * n).clamp(0.0, 1.0));
+    }
+    // a 5 × 5 box blur of `img` inside the normalized box `b` (everywhere when `b` is the frame)
+    let soften_in = |img: &lightcraft_raster::Rgb32f, b: [f64; 4]| {
+        let mut out = img.clone();
+        let (x0, x1) = ((b[0] * w as f64) as usize, ((b[2] * w as f64) as usize).min(w));
+        let (y0, y1) = ((b[1] * h as f64) as usize, ((b[3] * h as f64) as usize).min(h));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (mut acc, mut n) = ([0f32; 3], 0.0);
+                for yy in y.saturating_sub(2)..(y + 3).min(h) {
+                    for xx in x.saturating_sub(2)..(x + 3).min(w) {
+                        let c = img.data[yy * w + xx];
+                        acc = [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]];
+                        n += 1.0;
+                    }
+                }
+                out.data[y * w + x] = acc.map(|v| v / n);
+            }
+        }
+        out
+    };
+    let save = |img: &lightcraft_raster::Rgb32f, name: &str| {
+        let data: Vec<[u8; 4]> = img
+            .data
+            .iter()
+            .map(|c| {
+                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                [e(c[0]), e(c[1]), e(c[2]), 255]
+            })
+            .collect();
+        let png = lightcraft_codecs::encode_png(
+            &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: w, height: h, data }),
+            &Default::default(),
+        )
+        .unwrap();
+        std::fs::write(dir.join(name), png).unwrap();
+    };
+    // A: crisp frame, a small soft face (about 40 px on the thumbnail: measured on the preview);
+    // B: soft frame, a large crisp face (measured on the thumbnail)
+    let small_face = lightcraft_geom::Rect { x0: 0.47, y0: 0.45, x1: 0.53, y1: 0.53 };
+    let large_face = lightcraft_geom::Rect { x0: 0.35, y0: 0.30, x1: 0.65, y1: 0.70 };
+    save(&soften_in(&sharp, [0.44, 0.41, 0.56, 0.57]), "a.png");
+    let soft = soften_in(&sharp, [0.0, 0.0, 1.0, 1.0]);
+    let mut b = soft.clone();
+    for y in (0.24 * h as f64) as usize..(0.76 * h as f64) as usize {
+        for x in (0.30 * w as f64) as usize..(0.70 * w as f64) as usize {
+            b.data[y * w + x] = sharp.data[y * w + x];
+        }
+    }
+    save(&b, "b.png");
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    let (a, b) = (by_name(&s, "a.png"), by_name(&s, "b.png"));
+    for (i, (id, rect)) in [(a, small_face), (b, large_face)].into_iter().enumerate() {
+        s.commit("t", Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = vec![lightcraft_meta::Region { rect, kind: lightcraft_meta::RegionKind::Face, name: None, description: None }];
+        s.commit("t", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    }
+    let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["groups"], 1, "{r}");
+    let row = |id: lightcraft_catalog::PhotoId| r["photos"].as_array().unwrap().iter().find(|p| p["id"] == id.0).unwrap().clone();
+    let (ra, rb) = (row(a), row(b));
+    assert_eq!((ra["measuredOn"].as_str(), rb["measuredOn"].as_str()), (Some("preview"), Some("thumbnail")), "{r}");
+    // on the subjects B would win; across sources the frames decide, and A's frame is crisper
+    assert!(rb["subject"].as_f64() > ra["subject"].as_f64(), "{r}");
+    assert!(ra["frame"].as_f64() > rb["frame"].as_f64(), "{r}");
+    assert_eq!((ra["best"].as_bool(), rb["best"].as_bool()), (Some(true), Some(false)), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Find Dust Spots: soft dark spots on a smooth sky are found and healed (one undo step).
 #[test]
 fn dust_spots_are_found_and_healed() {
