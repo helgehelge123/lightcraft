@@ -3,7 +3,7 @@
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::{DevelopSettings, MaskShape, SpotMode};
+use lightcraft_develop::{DevelopSettings, MaskShape};
 use lightcraft_geom::{Affine, Point};
 use lightcraft_pipeline::geometry::Frame;
 use serde_json::json;
@@ -2401,7 +2401,7 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
     let r = s * long;
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-    let band = if remove { spot_band(feather_band(app.ui.tool == "fill", r, f)) } else { (r * (1.0 - f / 100.0), r) };
+    let band = if remove { spot_band(feather_band(!matches!(app.ui.tool.as_str(), "heal" | "clone"), r, f)) } else { (r * (1.0 - f / 100.0), r) };
     brush_circles(&p, o, band);
     let label = format!("{} {:.0} · {} {:.0}", crate::i18n::tr("Size"), s * 1000.0, crate::i18n::tr("Feather"), f);
     let at = o + vec2(0.0, r + 14.0);
@@ -2442,7 +2442,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     let mut bodies: Vec<(usize, bool, Vec<Pos2>, f32)> = Vec::new();
     let clip = p.clip_rect();
     for (i, s) in d.spots.iter().enumerate() {
-        let band = feather_band(s.mode == SpotMode::Fill, (s.size * long) as f32, s.feather as f32);
+        let band = feather_band(s.mode.content_aware(), (s.size * long) as f32, s.feather as f32);
         let r = band.1 + OUTLINE_GAP;
         let sel = Some(i) == active;
         if !mode.shows(sel, live) {
@@ -2479,7 +2479,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
-    let band = feather_band(app.ui.tool == "fill", r, app.ui.remove_feather);
+    let band = feather_band(!matches!(app.ui.tool.as_str(), "heal" | "clone"), r, app.ui.remove_feather);
     // a target or source under `q` (its pin or anywhere along its stroke): the selected spot's first, then the nearest
     let hit = |q: Pos2| {
         bodies
@@ -2570,7 +2570,7 @@ fn touches(pts: &[Pos2], r: f32, clip: Rect) -> bool {
 }
 
 /// Where a spot of radius `r` starts and stops blending into the photo, as `pipeline::spots` does it: Heal and
-/// Clone feather inside the radius (over its outer 80 % at full feather), Fill replaces all of it and feathers
+/// Clone feather inside the radius (over its outer 80 % at full feather), Remove (content-aware) replaces all of it and feathers
 /// outside, up to 0.3 radii further.
 fn feather_band(outside: bool, r: f32, feather: f32) -> (f32, f32) {
     let f = (feather / 100.0).clamp(0.0, 1.0);
