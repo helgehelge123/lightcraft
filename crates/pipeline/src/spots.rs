@@ -3,9 +3,10 @@
 //! - **Clone** copies the source patch with a feathered edge.
 //! - **Heal** copies the source's *detail* and keeps the target's *tone*: result = src + blur(target − src)
 //!   (frequency separation — a fast, stable approximation of gradient-domain healing).
-//! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
-//!   spot are scored by how well the source's surrounding annulus matches the target's.
-//! - **Fill** (content-aware) rebuilds the spot from patches of its surroundings instead of one
+//! - Heal and Clone pick a source automatically when none is set: candidate offsets on rings around
+//!   the spot are scored by how well the source's surrounding annulus matches the target's.
+//! - **Remove** (content-aware, as in Lightroom; **Fill**, the same, from spots saved before #2359
+//!   made Remove content-aware) rebuilds the spot from patches of its surroundings instead of one
 //!   source: PatchMatch-based completion ([`lightcraft_inpaint::complete`]), coarse to fine, so the
 //!   structure is chosen at a scale set by the spot's size (the same at preview and export size).
 //!   It reads patches from around the spot as far again as the spot is wide, replaces everything
@@ -197,8 +198,8 @@ pub fn window_for_reads_checked(
             let m = rr + read_pad(spot, r, rr, (x1 - x0).max(y1 - y0)) + 1.0;
             let t = [x0 - m, y0 - m, x1 + m, y1 + m];
             let s = match spot.source_offset {
-                // Fill reads its surroundings only (in `t`): a source offset left from another mode isn't sampled
-                _ if spot.mode == SpotMode::Fill => t,
+                // content-aware spots read their surroundings only (in `t`): a source offset left from another mode isn't sampled
+                _ if spot.mode.content_aware() => t,
                 Some(o) => {
                     let b = to_out.apply(o);
                     let (dx, dy) = (b.x - origin.x, b.y - origin.y);
@@ -270,14 +271,14 @@ const FILL_FEATHER_OUT: f64 = 0.3;
 
 /// The outer radius of a spot's footprint: its radius, and for Fill the feather outside it.
 fn reach(spot: &Spot, r: f64) -> f64 {
-    if spot.mode == SpotMode::Fill { r * (1.0 + FILL_FEATHER_OUT * (spot.feather / 100.0).clamp(0.0, 1.0)) } else { r }
+    if spot.mode.content_aware() { r * (1.0 + FILL_FEATHER_OUT * (spot.feather / 100.0).clamp(0.0, 1.0)) } else { r }
 }
 
 /// The surroundings a spot reads from around its footprint (`reach` past the stroke), in output
 /// pixels. Fill copies patches from them: as much again as the footprint is wide, so even a large
 /// hole is a small part of what it is rebuilt from.
 fn read_pad(spot: &Spot, r: f64, reach: f64, extent: f64) -> f64 {
-    if spot.mode == SpotMode::Fill { (2.0 * r).max(extent + 2.0 * reach) } else { r }
+    if spot.mode.content_aware() { (2.0 * r).max(extent + 2.0 * reach) } else { r }
 }
 
 /// Content-aware fill of the box: `src` becomes `tgt` with every pixel under the stroke (`alpha > 0`)
@@ -313,7 +314,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             })
             .collect();
         let Some(&first) = pts.first() else { continue };
-        let fill = spot.mode == SpotMode::Fill;
+        let fill = spot.mode.content_aware();
         let offset = match spot.source_offset {
             _ if fill => (0.0, 0.0),
             Some(o) => {
@@ -366,7 +367,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         if fill {
             fill_box(&mut src, &tgt, &alpha, bw, bh);
         }
-        let heal = matches!(spot.mode, SpotMode::Remove | SpotMode::Heal);
+        let heal = spot.mode == SpotMode::Heal;
         let low = if heal {
             // Tone correction from the spot's *surroundings* only: normalized convolution of
             // (target − source) over pixels outside the stroke (a membrane-like interpolation).
@@ -587,7 +588,8 @@ mod tests {
     }
 
     fn spot_at(x: f64, y: f64, size: f64, offset: Option<Point>) -> Spot {
-        Spot { points: vec![Point::new(x, y)], size, source_offset: offset, ..Default::default() }
+        // a spot that reads from a source: Heal (Remove is content-aware)
+        Spot { mode: SpotMode::Heal, points: vec![Point::new(x, y)], size, source_offset: offset, ..Default::default() }
     }
 
     #[test]
