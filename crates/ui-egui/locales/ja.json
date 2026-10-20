@@ -1046,7 +1046,6 @@
   "Photo Grid": "写真グリッド",
   "Photo Grid (G)": "写真グリッド（G）",
   "Photo Merge": "写真を合成",
-  "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "「写真 → 外部エディターで編集」（⇧⌘E）で16ビットTIFFコピーを作成し、元画像とスタックにまとめて開きます。Macではアプリ名を指定してください",
   "Photos": "写真",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "ローカルで参照しただけの写真は、この期間フォルダを開いていなければカタログから外します。ファイルはディスクに残り、再びフォルダを開くと表示されます",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "このフォルダに転送された写真は、転送が完了すると自動で追加されます",

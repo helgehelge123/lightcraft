@@ -1040,7 +1040,6 @@
   "Photo Grid": "Grade de fotos",
   "Photo Grid (G)": "Grade de fotos (G)",
   "Photo Merge": "Mesclagem de fotos",
-  "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Foto → Editar no editor externo (⇧⌘E) renderiza uma cópia TIFF de 16 bits, empilha-a com o original e a abre aqui (um nome de aplicativo no macOS, um caminho de programa em outros sistemas).",
   "Photos": "Fotos",
   "Photos per bracket (0 = auto)": "Fotos por bracketing (0 = automático)",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "Fotos vistas em Local mas nunca adicionadas nem alteradas saem do catálogo quando sua pasta não é navegada por esse período (verificado ao abrir a biblioteca). Os arquivos permanecem no disco; navegar pela pasta as mostra novamente.",

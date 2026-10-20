@@ -1081,7 +1081,6 @@
   "Photo Grid": "照片格狀檢視",
   "Photo Grid (G)": "照片格狀檢視（G）",
   "Photo Merge": "照片合併",
-  "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "「照片 → 在外部編輯器中編輯」（⇧⌘E）會算繪 16 位元 TIFF 副本，與原始照片堆疊後在此開啟（macOS 填應用程式名稱，其他平台填程式路徑）。",
   "Photos": "照片",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "曾在本機瀏覽、但未加入或變更的照片，在其資料夾超過此期間未瀏覽時會移出目錄（開啟照片庫時檢驗）。檔案仍保留在磁碟上，再次瀏覽資料夾即可重新顯示。",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "此資料夾中新出現的照片（連線拍攝、掃描器或同步程式）會在檔案完整後立即加入。",

@@ -1357,7 +1357,6 @@
   "Photo Grid (G)": "Mřížka fotografií (G)",
   "Photo Merge": "Sloučení fotografií",
   "Photo → Edit In → Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Fotografie → Upravit v → Upravit v PhotoCraft (⇧⌘E nebo pravé tlačítko na fotografii) vykreslí kopii s vašimi úpravami, přidá ji do sady s originálem a otevře v PhotoCraft. Po uložení se kopie zde aktualizuje. Do PSD ukládá PhotoCraft přímo. Umístění ponechte prázdné, pokud nepoužíváte přenosnou kopii.",
-  "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Fotografie → Upravit v externím editoru (⇧⌘E) vykreslí 16bitovou kopii TIFF, přidá ji do sady s originálem a otevře v této aplikaci (název aplikace v macOS, jinde cesta k programu).",
   "PhotoCraft": "PhotoCraft",
   "Photos": "Fotografie",
   "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float": "Fotografie upravené v HDR: JPEG s mapou zisku HDR (správné zobrazení všude, jasnější světla na displejích HDR), AVIF jako 10bitový, PNG a JPEG XL jako 16bitové Rec. 2020 PQ; TIFF vyžaduje 32bitová čísla s plovoucí řádovou čárkou",
