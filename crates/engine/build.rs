@@ -3,10 +3,10 @@
 //! Recipe from craft-fonts' docs/integration.md; craft-fonts is never a Cargo dependency, and this
 //! script only reads a local directory (no network).
 //!
-//! wasm32 embeds BIZ UDPGothic Regular (~4.5 MB), Noto Sans Thai (~214 KiB), Noto Sans Georgian and
-//! Noto Sans Hebrew Regular (~65 KiB, for Hebrew file and folder names), to keep the `.wasm` within the
-//! web size budget (Cloudflare serves at most 25 MiB per file); the export
-//! watermark falls back to it there. Native builds embed every font.
+//! wasm32 embeds BIZ UDPGothic Regular (~4.5 MB), Noto Sans Thai (~214 KiB), Noto Sans Georgian
+//! and Noto Sans Hebrew Regular (~65 KiB, for Hebrew file and folder names), to keep the `.wasm`
+//! within the web size budget (Cloudflare serves at most 25 MiB per file); the export watermark
+//! falls back to it there. Native builds embed every font.
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
