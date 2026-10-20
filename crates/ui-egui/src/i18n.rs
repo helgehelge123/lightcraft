@@ -872,6 +872,19 @@ mod tests {
         let chars: Vec<char> = src.chars().collect();
         let at = |i: usize| chars.get(i).copied().unwrap_or('\0');
         let ident = |c: char| c.is_alphanumeric() || c == '_';
+        // where the inside of a `#[cfg…]` or `#![cfg…]` attribute starts; other attributes are read as
+        // code, so the strings in `#[error("…")]` are checked
+        let cfg_start = |i: usize| {
+            let open = if at(i) == '#' && at(i + 1) == '[' {
+                i + 2
+            } else if at(i) == '#' && at(i + 1) == '!' && at(i + 2) == '[' {
+                i + 3
+            } else {
+                return None;
+            };
+            let name = (open..chars.len()).find(|&j| !chars[j].is_whitespace())?;
+            chars[name..].starts_with(&['c', 'f', 'g']).then_some(open)
+        };
         let (mut out, mut i, mut line) = (Vec::new(), 0, 1);
         let (mut depth, mut test_depth, mut pending_test) = (0usize, None, false);
         while i < chars.len() {
@@ -911,9 +924,29 @@ mod tests {
                         i += 1;
                     }
                 }
-            } else if chars[i..].starts_with(&['#', '[', 'c', 'f', 'g', '(', 't', 'e', 's', 't', ')', ']']) {
-                pending_test = true;
-                i += 12;
+            } else if let Some(start) = cfg_start(i) {
+                // `#[cfg(test)]` (spaces allowed) and `#[cfg(all(test, …))]` mark the next item as test
+                // code, `#![cfg(test)]` the rest of the file; `cfg(any(test, …))` code can ship, so it stays
+                let mut end = start;
+                let mut nested = 1;
+                while end < chars.len() && nested > 0 {
+                    nested = match chars[end] {
+                        '[' => nested + 1,
+                        ']' => nested - 1,
+                        _ => nested,
+                    };
+                    line += usize::from(chars[end] == '\n');
+                    end += 1;
+                }
+                let attr: String = chars[start..end.saturating_sub(1)].iter().filter(|ch| !ch.is_whitespace()).collect();
+                let all_test = attr.starts_with("cfg(all(") && !attr.contains("not(") && attr.split([',', '(', ')']).any(|t| t == "test");
+                if attr == "cfg(test)" || all_test {
+                    if c == '#' && at(i + 1) == '!' {
+                        break;
+                    }
+                    pending_test = true;
+                }
+                i = end;
             } else if let Some((start, hashes)) = raw_hashes {
                 let (first, mut text) = (line, String::new());
                 i = start + hashes + 1;
@@ -1002,10 +1035,16 @@ fn g<'a>(x: &'a str) -> &'a str { "long \
       line \u{2192}" }
 #[cfg(test)]
 mod tests { fn t() { "test"; } }
-const Z: &str = "after";"##;
+const Z: &str = "after";
+#[ cfg( test ) ] fn spaced() { "test"; }
+#[cfg(all(unix, test))] fn both() { "test"; }
+#[cfg(any(test, feature = "x"))] fn either() { "either"; }
+#[error("shown")] struct E;
+#![cfg(test)]
+fn rest() { "test"; }"##;
         let found = string_literals(src);
         let found: Vec<(usize, &str)> = found.iter().map(|(line, text)| (*line, text.as_str())).collect();
-        assert_eq!(found, [(2, "one ▸ \"two\""), (3, "raw \"x\""), (4, "long line →"), (8, "after")]);
+        assert_eq!(found, [(2, "one ▸ \"two\""), (3, "raw \"x\""), (4, "long line →"), (8, "after"), (11, "either"), (12, "shown")]);
     }
 
     /// Every symbol in the interface's own text has a glyph (issue #1950: ▸ showed as a box in the
@@ -1013,6 +1052,9 @@ const Z: &str = "after";"##;
     /// the code, not just the catalogs, with the fonts the build installs: a build without craft-fonts
     /// checks Inter and egui's own fonts alone, so a symbol can't lean on a CJK face. Letters and the
     /// full-width forms only CJK text uses are `catalog_characters_are_paintable`'s business.
+    /// Test code is left out: `tests/` directories, files named `tests.rs`, `tests_*.rs` or
+    /// `*_tests.rs`, and items under `#[cfg(test)]` or `#[cfg(all(test, …))]`. A string only a test
+    /// uses belongs in one of those, or it is checked like interface text.
     #[test]
     fn source_strings_use_paintable_symbols() {
         let ctx = egui::Context::default();

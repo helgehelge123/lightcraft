@@ -1075,7 +1075,6 @@
   "Photo Grid (G)": "Fotoraster (G)",
   "Photo Merge": "Fotos zusammenfügen",
   "Photo menu. The filmstrip has the photo context menu too. Adding a file again that is in Recently Deleted no": "Fotomenü. Auch der Filmstreifen besitzt das Fotokontextmenü. Wird eine Datei erneut hinzugefügt, die unter „Zuletzt gelöscht“ liegt,",
-  "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Foto → In externem Editor bearbeiten (⇧⌘E) rendert eine 16-Bit-TIFF-Kopie, stapelt sie mit dem Original und öffnet sie hier (App-Name unter macOS, sonst Programmpfad).",
   "Photos": "Fotos",
   "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float": "In HDR bearbeitete Fotos: JPEG mit HDR-Gain-Map (sieht überall richtig aus, hellere Lichter auf HDR-Bildschirmen), AVIF mit 10 Bit, PNG und JPEG XL mit 16 Bit Rec. 2020 PQ; TIFF braucht 32-Bit-Gleitkomma",
   "Photos in Recently Deleted can be restored from the app: right-click ▸ Restore (or Delete Permanently), also in the": "Fotos unter „Zuletzt gelöscht“ können in der App wiederhergestellt werden: Rechtsklick → Wiederherstellen oder Endgültig löschen, auch im",

@@ -1033,7 +1033,6 @@
   "Photo Grid": "Griglia foto",
   "Photo Grid (G)": "Griglia foto (G)",
   "Photo Merge": "Unione di foto",
-  "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Foto → Modifica nell'editor esterno (⇧⌘E) genera una copia TIFF a 16 bit, la mette in pila con l'originale e la apre qui (il nome di un'app su macOS, il percorso di un programma altrove).",
   "Photos": "Foto",
   "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float": "Foto modificate in HDR: JPEG con gain map HDR (si vede bene ovunque, luci più brillanti sugli schermi HDR), AVIF a 10 bit, PNG e JPEG XL a 16 bit Rec. 2020 PQ; il TIFF richiede virgola mobile a 32 bit",
   "Photos per bracket (0 = auto)": "Foto per bracketing (0 = automatico)",
