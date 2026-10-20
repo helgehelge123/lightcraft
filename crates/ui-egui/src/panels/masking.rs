@@ -347,9 +347,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let room = (ui.available_width() - 30.0).max(0.0);
                 let resp = ui.scope(|ui| {
                     ui.set_max_width(room);
-                    ui.add(egui::Label::new(text).truncate().sense(Sense::click()))
+                    ui.add(egui::Label::new(text.clone()).truncate().sense(Sense::click()))
                 });
                 let resp = resp.inner;
+                if matches!(c.op, lightcraft_develop::MaskOp::Intersect) {
+                    // the drawn ∩ has no text: the row still names its mode to screen readers
+                    let spoken = format!("{}: {text}", crate::i18n::tr("Intersect"));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+                }
                 register(ui.ctx(), format!("component:{i}"), resp.rect);
                 if resp.double_clicked() {
                     app.ui.renaming_component = Some((m.id, i, label.clone()));
