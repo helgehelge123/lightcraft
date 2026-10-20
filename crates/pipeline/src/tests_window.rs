@@ -449,12 +449,14 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
 
 // Given a windowed render, only spots that read a source get one picked for them
 #[test]
-fn a_window_picks_no_source_for_a_fill_spot() {
+fn a_window_picks_no_source_for_a_content_aware_spot() {
     use lightcraft_develop::SpotMode;
     let req = RenderRequest { window: Some(PixelWindow { x: 300, y: 200, w: 256, h: 192 }), ..RenderRequest::fit(W, H) };
     let (src, info) = (scene(), SourceInfo::default());
-    let fill = with_spot(SpotMode::Fill, (0.40, 0.5), None);
-    assert_eq!(crate::plan(&src, &info, &fill, &req).settings.spots[0].source_offset, None, "Fill samples no source: none is ranked for it");
+    for mode in [SpotMode::Remove, SpotMode::Fill] {
+        let s = with_spot(mode, (0.40, 0.5), None);
+        assert_eq!(crate::plan(&src, &info, &s, &req).settings.spots[0].source_offset, None, "{mode:?} samples no source: none is ranked for it");
+    }
     let heal = with_spot(SpotMode::Heal, (0.40, 0.5), None);
     assert!(crate::plan(&src, &info, &heal, &req).settings.spots[0].source_offset.is_some(), "Heal still gets one fixed from the whole frame");
 }

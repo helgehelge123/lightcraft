@@ -402,7 +402,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
-    // (Fill reads no source, so it needs none)
+    // (content-aware spots read no source, so they need none)
     if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none() && spots::reads_source(sp)) {
         let picked: Vec<Option<lightcraft_geom::Point>> = settings
             .spots
