@@ -198,7 +198,7 @@ pub fn window_for_reads_checked(
             let m = rr + read_pad(spot, r, rr, (x1 - x0).max(y1 - y0)) + 1.0;
             let t = [x0 - m, y0 - m, x1 + m, y1 + m];
             let s = match spot.source_offset {
-                // content-aware spots read their surroundings only (in `t`)
+                // content-aware spots read their surroundings only (in `t`): a source offset left from another mode isn't sampled
                 _ if spot.mode.content_aware() => t,
                 Some(o) => {
                     let b = to_out.apply(o);
@@ -620,8 +620,12 @@ mod tests {
         let win = PixelWindow { x: 1000, y: 1000, w: 400, h: 300 };
         // a spot whose source is a long way off would need an enormous window: not granted
         let wide = spot_at(0.03, 0.04, 0.01, Some(Point::new(0.6, 0.0)));
-        let g = window_for_reads(&with_spots(vec![wide]), &frame, 40_000, 30_000, ppl, win);
+        let g = window_for_reads(&with_spots(vec![wide.clone()]), &frame, 40_000, 30_000, ppl, win);
         assert!(g.w <= MAX_SPOT_SPAN && g.h <= MAX_SPOT_SPAN, "{g:?}");
+        // the same spot as Fill never reads that source, so its own (feathered, padded) box is granted
+        let fill = Spot { mode: SpotMode::Fill, feather: 100.0, ..wide };
+        let g = window_for_reads_checked(&with_spots(vec![fill]), &frame, 40_000, 30_000, ppl, win).expect("a Fill spot's read box fits");
+        assert!(g.x < win.x && g.y < win.y && g.w <= MAX_SPOT_SPAN, "{g:?}");
         for bad in [f64::NAN, f64::INFINITY, 1e300, -1e300] {
             let s = spot_at(bad, bad, bad, Some(Point::new(bad, bad)));
             let g = window_for_reads(&with_spots(vec![s]), &frame, 40_000, 30_000, ppl, win);
