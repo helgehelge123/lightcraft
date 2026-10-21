@@ -72,6 +72,12 @@ fn a_photo_dragged_to_the_front_of_its_burst_becomes_the_pick() {
     assert_eq!(s.catalog.burst(1), vec![a, c, b]);
     assert!(an(&s, a).best);
     assert_eq!(flag(&s, a), Flag::Pick);
+    // a rejected shot dragged to the front was chosen by hand: it takes the Pick
+    s.catalog.apply(Op::SetFlag { id: b, flag: Flag::Reject }).unwrap();
+    mv(&mut s, json!({"ids": [b.0], "index": 0}));
+    assert_eq!((flag(&s, b), flag(&s, a)), (Flag::Pick, Flag::None));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((flag(&s, b), flag(&s, a)), (Flag::Reject, Flag::Pick));
     // placing a photo where it already is changes nothing and makes no undo step
     let commits = s.commits();
     let r = mv(&mut s, json!({"ids": [a.0], "index": 0}));

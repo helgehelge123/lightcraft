@@ -98,8 +98,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if resp.hovered() && dragged.is_none() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
+            // the whole burst, also its photos out of view
             if resp.drag_started() {
-                app.ui.dragging_photos = Some(photos.iter().map(|p| p.0).collect());
+                app.ui.dragging_photos = Some(app.session.catalog.burst(*g).iter().map(|p| p.0).collect());
             }
             if pointer.is_some_and(|p| title.contains(p)) {
                 target = Some((Target::Burst(*g, n), None));
@@ -246,7 +247,10 @@ fn drop_on(app: &mut LightcraftApp, ui: &mut egui::Ui, shown: &Shown, ids: &[Pho
             let members = shown.iter().find(|(n, _)| *n == g).map(|(_, m)| m.as_slice()).unwrap_or(&[]);
             // the place once the dragged photos have left theirs
             let index = members.iter().take(slot).filter(|m| !ids.contains(m)).count();
-            let whole = shown.iter().any(|(n, m)| *n != g && m.len() > 1 && m.len() == ids.len() && m.iter().all(|p| ids.contains(p)));
+            let whole = shown.iter().any(|(n, _)| {
+                let all = app.session.catalog.burst(*n);
+                *n != g && all.len() > 1 && all.len() == ids.len() && all.iter().all(|p| ids.contains(p))
+            });
             let hint = if whole {
                 "Merge into this burst"
             } else if index == 0 && slot < members.len() {

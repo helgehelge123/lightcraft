@@ -223,3 +223,23 @@ fn a_photo_never_culled_is_refused() {
     let toast = h.app.ui.toast.as_ref().map(|(t, _, _)| t.clone()).unwrap_or_default();
     assert!(toast.contains("Assisted Culling"), "{toast}");
 }
+
+/// A burst dragged by its title takes all its photos along, also those the view leaves out.
+#[test]
+fn a_burst_dragged_by_its_title_takes_its_photos_out_of_view() {
+    let (mut h, [a, b, c, d, e, _]) = app();
+    // only the picks are in view: e (of burst 2) is left out
+    let r = h.app.session.execute("library.filter", &json!({"ruleSet": {"rules": [{"field": "bestOfGroup", "op": "is", "value": true}]}})).unwrap();
+    assert!(r.is_object(), "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!h.app.session.visible_cloned().contains(&e), "e is out of view");
+    let to = widget(&h, "burst:1").center();
+    let from = widget(&h, "burst:2").center();
+    drag(&mut h, from, to);
+    assert_eq!(hint(&h).as_deref(), Some("Merge into this burst"));
+    release(&mut h, to);
+    assert_eq!(h.app.session.catalog.burst(1), vec![a, b, c, d, e], "e came along");
+    assert!(h.app.session.catalog.burst(2).is_empty());
+}

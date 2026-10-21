@@ -286,9 +286,8 @@ fn move_to_burst(s: &mut Session, p: &Value) -> Result<Value> {
         if !is_pick(old_pick) {
             flags.insert(old_pick, Flag::None);
         }
-        if let Some(n) = new_pick
-            && flag(s, n) == Flag::None
-        {
+        // the new pick was chosen by hand: it takes the Pick even over a Reject
+        if let Some(n) = new_pick {
             flags.insert(n, Flag::Pick);
         }
     }
