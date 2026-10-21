@@ -271,7 +271,7 @@ const FILL_FEATHER_OUT: f64 = 0.3;
 
 /// Whether `spot` samples a source patch: Fill rebuilds the area from its surroundings instead.
 pub fn reads_source(spot: &Spot) -> bool {
-    spot.mode != SpotMode::Fill
+    !spot.mode.content_aware()
 }
 
 /// The outer radius of a spot's footprint: its radius, and for Fill the feather outside it.
