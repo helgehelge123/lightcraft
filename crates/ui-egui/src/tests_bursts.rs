@@ -243,3 +243,21 @@ fn a_burst_dragged_by_its_title_takes_its_photos_out_of_view() {
     assert_eq!(h.app.session.catalog.burst(1), vec![a, b, c, d, e], "e came along");
     assert!(h.app.session.catalog.burst(2).is_empty());
 }
+
+/// A photo dropped after a shown member lands right after it in the whole burst, before the
+/// members the view leaves out, not after them.
+#[test]
+fn a_drop_after_a_shown_photo_goes_before_the_photos_out_of_view() {
+    let (mut h, [a, b, c, d, _, _]) = app();
+    // only the picks are in view: burst 1 shows a, its b and c are left out
+    h.app.session.execute("library.filter", &json!({"ruleSet": {"rules": [{"field": "bestOfGroup", "op": "is", "value": true}]}})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    let to = pos2(cell(&h, a).right() - 4.0, cell(&h, a).center().y);
+    let from = cell(&h, d).center();
+    drag(&mut h, from, to);
+    assert_eq!(hint(&h).as_deref(), Some("Move to this burst"));
+    release(&mut h, to);
+    assert_eq!(h.app.session.catalog.burst(1), vec![a, d, b, c], "right after a, before b and c");
+}

@@ -10,7 +10,7 @@
 //! Widgets: `burst:{n}` (a burst's title, `n` its number), `burstPhoto:{id}`, `burstPick:{n}`,
 //! `burst:new`, `burst:none`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
@@ -55,10 +55,31 @@ fn bursts(app: &mut LightcraftApp) -> Shown {
     b
 }
 
+/// Every burst of the library: its number → its photos, pick first.
+pub type All = Arc<HashMap<u32, Vec<PhotoId>>>;
+
+/// Every burst of the library, built once per view generation (it follows every catalog change).
+fn all_bursts(app: &mut LightcraftApp) -> All {
+    let (generation, _) = app.session.visible_shared();
+    if let Some((g, b)) = &app.caches.burst_index
+        && *g == generation
+    {
+        return b.clone();
+    }
+    let b: All = Arc::new(app.session.catalog.burst_index());
+    app.caches.burst_index = Some((generation, b.clone()));
+    b
+}
+
+/// A [`Target::Burst`] slot after every photo of the burst: a drop on its title or after its
+/// last photo.
+const LAST: usize = usize::MAX;
+
 /// Where a drop under the pointer would put the dragged photos.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Target {
-    /// Burst `n` at `slot` (a place among its photos as shown, the dragged ones included).
+    /// Burst `n` at `slot` (a place among its photos as shown, the dragged ones included;
+    /// [`LAST`]: after every photo of the burst, those out of view too).
     Burst(u32, usize),
     New,
     Nowhere,
@@ -100,10 +121,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             // the whole burst, also its photos out of view
             if resp.drag_started() {
-                app.ui.dragging_photos = Some(app.session.catalog.burst(*g).iter().map(|p| p.0).collect());
+                app.ui.dragging_photos = Some(all_bursts(app).get(g).map(|m| m.iter().map(|p| p.0).collect()).unwrap_or_default());
             }
             if pointer.is_some_and(|p| title.contains(p)) {
-                target = Some((Target::Burst(*g, n), None));
+                target = Some((Target::Burst(*g, LAST), None));
             }
             // the photos, in rows
             let rows = n.div_ceil(cols);
@@ -132,7 +153,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             {
                 // the room after the last photo: last
                 let last = cell_at(n.saturating_sub(1));
-                target = Some((Target::Burst(*g, n), Some(Rect::from_min_max(pos2(last.right() + GAP / 2.0 - 1.5, last.top()), pos2(last.right() + GAP / 2.0 + 1.5, last.bottom())))));
+                target = Some((Target::Burst(*g, LAST), Some(Rect::from_min_max(pos2(last.right() + GAP / 2.0 - 1.5, last.top()), pos2(last.right() + GAP / 2.0 + 1.5, last.bottom())))));
             }
             if dragged.is_some() && matches!(target, Some((Target::Burst(tg, _), _)) if tg == *g) {
                 ui.painter().rect_stroke(title.union(area).shrink2(vec2(8.0, 1.0)), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);
@@ -244,13 +265,27 @@ fn drop_on(app: &mut LightcraftApp, ui: &mut egui::Ui, shown: &Shown, ids: &[Pho
     }
     let (params, hint) = match tgt {
         Target::Burst(g, slot) => {
+            let all = all_bursts(app);
             let members = shown.iter().find(|(n, _)| *n == g).map(|(_, m)| m.as_slice()).unwrap_or(&[]);
-            // the place once the dragged photos have left theirs
-            let index = members.iter().take(slot).filter(|m| !ids.contains(m)).count();
-            let whole = shown.iter().any(|(n, _)| {
-                let all = app.session.catalog.burst(*n);
-                *n != g && all.len() > 1 && all.len() == ids.len() && all.iter().all(|p| ids.contains(p))
-            });
+            // the place in the whole burst (members the view leaves out included) once the dragged
+            // photos have left theirs: right after the last shown member before the slot
+            let rest: Vec<PhotoId> = all.get(&g).map(|m| m.iter().copied().filter(|p| !ids.contains(p)).collect()).unwrap_or_default();
+            let index = if slot == LAST {
+                rest.len()
+            } else {
+                members[..slot.min(members.len())]
+                    .iter()
+                    .rev()
+                    .find(|m| !ids.contains(m))
+                    .and_then(|m| rest.iter().position(|p| p == m))
+                    .map_or(0, |i| i + 1)
+            };
+            // the dragged photos are a whole other burst (one lookup: the first one's burst)
+            let from = ids.first().and_then(|id| app.session.catalog.photo(*id)).and_then(|p| p.analysis).and_then(|a| a.group);
+            let whole = from
+                .filter(|n| *n != g)
+                .and_then(|n| all.get(&n))
+                .is_some_and(|m| m.len() > 1 && m.len() == ids.len() && m.iter().all(|p| ids.contains(p)));
             let hint = if whole {
                 "Merge into this burst"
             } else if index == 0 && slot < members.len() {
@@ -260,7 +295,7 @@ fn drop_on(app: &mut LightcraftApp, ui: &mut egui::Ui, shown: &Shown, ids: &[Pho
             } else {
                 "Move to this burst"
             };
-            let index = if slot >= members.len() { Value::Null } else { json!(index) };
+            let index = if index >= rest.len() { Value::Null } else { json!(index) };
             (json!({"ids": ids.iter().map(|p| p.0).collect::<Vec<_>>(), "burst": g, "index": index}), hint)
         }
         Target::New => (json!({"ids": ids.iter().map(|p| p.0).collect::<Vec<_>>(), "burst": "new"}), "New burst"),
