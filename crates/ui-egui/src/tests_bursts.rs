@@ -261,3 +261,30 @@ fn a_drop_after_a_shown_photo_goes_before_the_photos_out_of_view() {
     release(&mut h, to);
     assert_eq!(h.app.session.catalog.burst(1), vec![a, d, b, c], "right after a, before b and c");
 }
+
+/// Between two shown photos with one out of view between them, a drop on the left half of the
+/// second goes right before it, a drop on the right half of the first right after that one.
+#[test]
+fn a_drop_keeps_its_side_of_a_photo_out_of_view() {
+    let (mut h, [a, b, c, d, _, _]) = app();
+    // b is left out: burst 1 shows a, c
+    h.app.session.execute("library.filter", &json!({"ruleSet": {"rules": [{"field": "fileName", "op": "notContains", "value": "b.jpg"}]}})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!h.app.session.visible_cloned().contains(&b));
+    let before_c = pos2(cell(&h, c).left() + 4.0, cell(&h, c).center().y);
+    let from = cell(&h, d).center();
+    drag(&mut h, from, before_c);
+    release(&mut h, before_c);
+    assert_eq!(h.app.session.catalog.burst(1), vec![a, b, d, c], "right before c");
+    h.app.run("edit.undo", json!({})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    let after_a = pos2(cell(&h, a).right() - 4.0, cell(&h, a).center().y);
+    let from = cell(&h, d).center();
+    drag(&mut h, from, after_a);
+    release(&mut h, after_a);
+    assert_eq!(h.app.session.catalog.burst(1), vec![a, d, b, c], "right after a");
+}

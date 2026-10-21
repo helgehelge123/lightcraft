@@ -79,8 +79,9 @@ const LAST: usize = usize::MAX;
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Target {
     /// Burst `n` at `slot` (a place among its photos as shown, the dragged ones included;
-    /// [`LAST`]: after every photo of the burst, those out of view too).
-    Burst(u32, usize),
+    /// [`LAST`]: after every photo of the burst, those out of view too), dropped on the left half
+    /// of the photo at `slot` (`true`: right before it) or the right half of the one before.
+    Burst(u32, usize, bool),
     New,
     Nowhere,
 }
@@ -124,7 +125,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 app.ui.dragging_photos = Some(all_bursts(app).get(g).map(|m| m.iter().map(|p| p.0).collect()).unwrap_or_default());
             }
             if pointer.is_some_and(|p| title.contains(p)) {
-                target = Some((Target::Burst(*g, LAST), None));
+                target = Some((Target::Burst(*g, LAST, false), None));
             }
             // the photos, in rows
             let rows = n.div_ceil(cols);
@@ -144,7 +145,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 {
                     let slot = if p.x < r.center().x { i } else { i + 1 };
                     let edge = if slot == i { r.left() - GAP / 2.0 } else { r.right() + GAP / 2.0 };
-                    target = Some((Target::Burst(*g, slot), Some(Rect::from_min_max(pos2(edge - 1.5, r.top()), pos2(edge + 1.5, r.bottom())))));
+                    target = Some((Target::Burst(*g, slot, slot == i), Some(Rect::from_min_max(pos2(edge - 1.5, r.top()), pos2(edge + 1.5, r.bottom())))));
                 }
             }
             if target.is_none()
@@ -153,9 +154,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             {
                 // the room after the last photo: last
                 let last = cell_at(n.saturating_sub(1));
-                target = Some((Target::Burst(*g, LAST), Some(Rect::from_min_max(pos2(last.right() + GAP / 2.0 - 1.5, last.top()), pos2(last.right() + GAP / 2.0 + 1.5, last.bottom())))));
+                target = Some((Target::Burst(*g, LAST, false), Some(Rect::from_min_max(pos2(last.right() + GAP / 2.0 - 1.5, last.top()), pos2(last.right() + GAP / 2.0 + 1.5, last.bottom())))));
             }
-            if dragged.is_some() && matches!(target, Some((Target::Burst(tg, _), _)) if tg == *g) {
+            if dragged.is_some() && matches!(target, Some((Target::Burst(tg, ..), _)) if tg == *g) {
                 ui.painter().rect_stroke(title.union(area).shrink2(vec2(8.0, 1.0)), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);
             }
         }
@@ -264,14 +265,19 @@ fn drop_on(app: &mut LightcraftApp, ui: &mut egui::Ui, shown: &Shown, ids: &[Pho
         return;
     }
     let (params, hint) = match tgt {
-        Target::Burst(g, slot) => {
+        Target::Burst(g, slot, before) => {
             let all = all_bursts(app);
             let members = shown.iter().find(|(n, _)| *n == g).map(|(_, m)| m.as_slice()).unwrap_or(&[]);
             // the place in the whole burst (members the view leaves out included) once the dragged
-            // photos have left theirs: right after the last shown member before the slot
+            // photos have left theirs: right before the photo dropped on, or right after the one
+            // whose right half it was (members out of view between them stay on their side)
             let rest: Vec<PhotoId> = all.get(&g).map(|m| m.iter().copied().filter(|p| !ids.contains(p)).collect()).unwrap_or_default();
+            let at = |m: &PhotoId| rest.iter().position(|p| p == m);
+            let next = members.get(slot..).and_then(|after| after.iter().find(|m| !ids.contains(m)));
             let index = if slot == LAST {
                 rest.len()
+            } else if let Some(i) = next.filter(|_| before).and_then(at) {
+                i
             } else {
                 members[..slot.min(members.len())]
                     .iter()
