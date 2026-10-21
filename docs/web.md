@@ -59,11 +59,12 @@ always set both, and without `CRAFT_FONTS_REQUIRED` a face missing from the mani
 warning). On wasm32 `crates/engine/build.rs` embeds BIZ UDPGothic Regular (UI and watermark
 fallback), Noto Sans Thai Regular (~214 KiB) and Noto Sans Hebrew Regular (~65 KiB), for Thai and
 Hebrew file and folder names in every UI language (a Hebrew name's words stay in logical order,
-see [localization-parity](localization-parity.md)). The web bundle also ships Noto Sans CJK SC
-Regular as `lightcraft_zh_hans.otf` and loads it before the UI starts. Keeping the 16 MB Chinese
-face separate leaves the module under Cloudflare's 25 MiB per-file limit (the older Japanese-only
-module measured 21.8 MB). Without `CRAFT_FONTS_DIR`, the web build still works, but Chinese,
-Japanese, Thai and Hebrew text lack glyphs.
+see [localization-parity](localization-parity.md)), and Noto Sans Georgian Regular for the
+Georgian interface. The web bundle also ships Noto Sans CJK SC Regular as `lightcraft_zh_hans.otf`
+and loads it before the UI starts. Keeping the 16 MB Chinese face separate leaves the module under
+Cloudflare's 25 MiB per-file limit (the older Japanese-only module measured 21.8 MB). Without
+`CRAFT_FONTS_DIR`, the web build still works, but Chinese, Japanese, Thai, Georgian and Hebrew
+text lack glyphs.
 
 ## Deploying: headers
 
