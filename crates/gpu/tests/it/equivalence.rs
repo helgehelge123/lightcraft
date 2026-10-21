@@ -454,6 +454,23 @@ fn local_curves_render_on_the_gpu() {
     }
     let src = scene(0, 480, 320);
     let (raw, req) = (SourceInfo { raw: true, ..Default::default() }, RenderRequest::fit(480, 480));
+    eprintln!("adapter: {}", lightcraft_gpu::adapter_name().unwrap_or_default());
+    // one mask with only an RGB curve, one with only a colour channel's curve, then the three-mask case
+    use lightcraft_develop::PointCurves;
+    let pts = |v: &[(f64, f64)]| v.iter().map(|p| Point::new(p.0, p.1)).collect::<Vec<_>>();
+    let radial = MaskShape::Radial { center: Point::new(0.45, 0.5), rx: 0.32, ry: 0.25, angle: 0.0, feather: 60.0, invert: false };
+    let one = |curve| DevelopSettings {
+        masks: vec![Mask {
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: radial.clone() }],
+            curve,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let rgb = one(PointCurves { master: pts(&[(0.0, 0.05), (0.25, 0.15), (0.5, 0.5), (0.75, 0.88), (1.0, 0.97)]), ..Default::default() });
+    check("local curve: RGB only", &src, &raw, &rgb, &req);
+    let channel = one(PointCurves { blue: pts(&[(0.0, 0.15), (0.5, 0.62), (1.0, 0.9)]), ..Default::default() });
+    check("local curve: blue only", &src, &raw, &channel, &req);
     let mut s = DevelopSettings::default();
     let edit = cases().into_iter().find(|(name, _)| *name == "masks (local curves)").map(|c| c.1).unwrap();
     edit(&mut s);
