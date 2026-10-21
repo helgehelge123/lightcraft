@@ -269,7 +269,7 @@ pub fn window_for_reads_checked(
 /// never shows through the feather.
 const FILL_FEATHER_OUT: f64 = 0.3;
 
-/// Whether `spot` samples a source patch: Fill rebuilds the area from its surroundings instead.
+/// Whether `spot` samples a source patch: content-aware spots (Remove, Fill) rebuild the area from their surroundings instead.
 pub fn reads_source(spot: &Spot) -> bool {
     !spot.mode.content_aware()
 }
@@ -280,10 +280,16 @@ fn reach(spot: &Spot, r: f64) -> f64 {
 }
 
 /// The surroundings a spot reads from around its footprint (`reach` past the stroke), in output
-/// pixels. Fill copies patches from them: as much again as the footprint is wide, so even a large
-/// hole is a small part of what it is rebuilt from.
+/// pixels. Content-aware spots copy patches from them: as much again as the footprint is wide, so even a large
+/// hole is a small part of what it is rebuilt from, but no more than keeps the box it works in
+/// within [`MAX_SPOT_SPAN`] (at least a radius, which [`apply`] guarantees fits).
 fn read_pad(spot: &Spot, r: f64, reach: f64, extent: f64) -> f64 {
-    if spot.mode.content_aware() { (2.0 * r).max(extent + 2.0 * reach) } else { r }
+    if spot.mode.content_aware() {
+        let room = (MAX_SPOT_SPAN as f64 - (extent + 2.0 * reach)) / 2.0;
+        (2.0 * r).max(extent + 2.0 * reach).min(room.max(r))
+    } else {
+        r
+    }
 }
 
 /// Content-aware fill of the box: `src` becomes `tgt` with every pixel under the stroke (`alpha > 0`)
@@ -337,6 +343,11 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             y0 = y0.min(p.1 - rr);
             x1 = x1.max(p.0 + rr);
             y1 = y1.max(p.1 + rr);
+        }
+        // a content-aware spot whose box would pass MAX_SPOT_SPAN is left as it is: rebuilding that much is more
+        // than a render may allocate and take (and no window could hold it either)
+        if fill && (x1 - x0).max(y1 - y0) + 2.0 * r > MAX_SPOT_SPAN as f32 {
+            continue;
         }
         let pad = read_pad(spot, r as f64, rr as f64, ((x1 - x0).max(y1 - y0) - 2.0 * rr) as f64) as f32;
         let (bx0, by0) = (((x0 - pad).floor().max(0.0)) as usize, ((y0 - pad).floor().max(0.0)) as usize);
@@ -558,6 +569,28 @@ mod tests {
         apply(&mut img, &[spot], &frame, frame.px_per_long(w));
         let darkest = img.data.iter().map(|p| p[0]).fold(f32::MAX, f32::min);
         assert!(darkest > 0.55, "darkest pixel {darkest}");
+    }
+
+    #[test]
+    fn a_fill_spot_works_in_a_bounded_box() {
+        // a long stroke reads only as much around it as keeps its box within MAX_SPOT_SPAN, at least a radius
+        let spot = Spot { mode: SpotMode::Fill, ..Default::default() };
+        for (r, extent) in [(50.0, 300.0), (100.0, 6000.0), (100.0, MAX_SPOT_SPAN as f64 - 300.0)] {
+            let reach = reach(&spot, r);
+            let pad = read_pad(&spot, r, reach, extent);
+            assert!(extent + 2.0 * (reach + pad) <= MAX_SPOT_SPAN as f64 || pad == r, "r {r}, extent {extent}: pad {pad}");
+            assert!(pad >= r);
+        }
+        assert_eq!(read_pad(&spot, 50.0, 50.0, 300.0), 400.0, "a small spot keeps as much again as it is wide");
+        // one wider than that is left alone rather than allocating and completing a box past the limit
+        let w = MAX_SPOT_SPAN + 400;
+        let mut img = Rgb32f::from_fn(w, 24, |x, y| if y == 12 { [0.02; 3] } else { [x as f32 / w as f32; 3] });
+        let before = img.data.clone();
+        let frame = Frame::new(w, 24, &DevelopSettings::default(), true);
+        let spot =
+            Spot { mode: SpotMode::Fill, points: vec![Point::new(0.01, 0.5), Point::new(0.99, 0.5)], size: 3.0 / w as f64, ..Default::default() };
+        apply(&mut img, &[spot], &frame, frame.px_per_long(w));
+        assert!(img.data == before, "a Fill spot past MAX_SPOT_SPAN is skipped");
     }
 
     #[test]
