@@ -194,6 +194,10 @@ pub fn window_for_reads_checked(
             // the box `apply` works in: the footprint plus the surroundings it reads (a pixel more
             // for rounding)
             let rr = reach(spot, r);
+            // a spot `apply` leaves alone reads nothing (and mustn't refuse the window for the others)
+            if too_big_to_fill(spot, r, rr, (x1 - x0).max(y1 - y0)) {
+                return None;
+            }
             let m = rr + read_pad(spot, r, rr, (x1 - x0).max(y1 - y0)) + 1.0;
             let t = [x0 - m, y0 - m, x1 + m, y1 + m];
             let s = match spot.source_offset {
@@ -278,6 +282,13 @@ fn reach(spot: &Spot, r: f64) -> f64 {
     if spot.mode == SpotMode::Fill { r * (1.0 + FILL_FEATHER_OUT * (spot.feather / 100.0).clamp(0.0, 1.0)) } else { r }
 }
 
+/// Whether `apply` leaves a Fill spot (radius `r`, footprint `reach` past a stroke `extent` wide) as it
+/// is: even with only a radius of surroundings its box would pass [`MAX_SPOT_SPAN`], more than a render
+/// may allocate and complete, and no window could hold it either.
+fn too_big_to_fill(spot: &Spot, r: f64, reach: f64, extent: f64) -> bool {
+    spot.mode == SpotMode::Fill && extent + 2.0 * reach + 2.0 * r > MAX_SPOT_SPAN as f64
+}
+
 /// The surroundings a spot reads from around its footprint (`reach` past the stroke), in output
 /// pixels. Fill copies patches from them: as much again as the footprint is wide, so even a large
 /// hole is a small part of what it is rebuilt from, but no more than keeps the box it works in
@@ -343,12 +354,11 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             x1 = x1.max(p.0 + rr);
             y1 = y1.max(p.1 + rr);
         }
-        // a Fill spot whose box would pass MAX_SPOT_SPAN is left as it is: rebuilding that much is more
-        // than a render may allocate and take (and no window could hold it either)
-        if fill && (x1 - x0).max(y1 - y0) + 2.0 * r > MAX_SPOT_SPAN as f32 {
+        let extent = ((x1 - x0).max(y1 - y0) - 2.0 * rr) as f64;
+        if too_big_to_fill(spot, r as f64, rr as f64, extent) {
             continue;
         }
-        let pad = read_pad(spot, r as f64, rr as f64, ((x1 - x0).max(y1 - y0) - 2.0 * rr) as f64) as f32;
+        let pad = read_pad(spot, r as f64, rr as f64, extent) as f32;
         let (bx0, by0) = (((x0 - pad).floor().max(0.0)) as usize, ((y0 - pad).floor().max(0.0)) as usize);
         let (bx1, by1) = (((x1 + pad).ceil() as usize).min(w), ((y1 + pad).ceil() as usize).min(h));
         if bx1 <= bx0 || by1 <= by0 {
@@ -590,6 +600,21 @@ mod tests {
             Spot { mode: SpotMode::Fill, points: vec![Point::new(0.01, 0.5), Point::new(0.99, 0.5)], size: 3.0 / w as f64, ..Default::default() };
         apply(&mut img, &[spot], &frame, frame.px_per_long(w));
         assert!(img.data == before, "a Fill spot past MAX_SPOT_SPAN is skipped");
+    }
+
+    #[test]
+    fn a_skipped_fill_spot_does_not_refuse_the_window_for_the_others() {
+        use crate::PixelWindow;
+        let (w, h) = (MAX_SPOT_SPAN + 400, 3000);
+        let frame = Frame::new(w, h, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(w);
+        let long = Spot { mode: SpotMode::Fill, points: vec![Point::new(0.01, 0.5), Point::new(0.99, 0.5)], size: 0.002, ..Default::default() };
+        // a window over both: the small spot just below the long stroke
+        let small = Spot { mode: SpotMode::Fill, points: vec![Point::new(0.5, 0.52)], size: 0.005, ..Default::default() };
+        let win = PixelWindow { x: w / 2 - 50, y: 1480, w: 100, h: 100 };
+        let g = window_for_reads_checked(&with_spots(vec![long, small]), &frame, w, h, ppl, win)
+            .expect("the long stroke, which apply skips, doesn't refuse the window");
+        assert!(g.w > win.w && g.h > win.h, "the small spot still gets its surroundings: {g:?}");
     }
 
     #[test]
