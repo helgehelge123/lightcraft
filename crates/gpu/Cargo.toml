@@ -47,6 +47,10 @@ candle-core = { workspace = true }
 name = "sam3_backbone"
 required-features = ["sam"]
 
+[[test]]
+name = "sam3_necks"
+required-features = ["sam"]
+
 [[example]]
 name = "sam3_backbone_bench"
 required-features = ["sam"]
