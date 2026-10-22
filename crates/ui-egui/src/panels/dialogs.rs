@@ -1678,7 +1678,9 @@ pub fn fmt_gap(v: f64) -> String {
         60..3600 if v.is_multiple_of(60) => format!("{} min", v / 60),
         60..3600 => format!("{} min {} s", v / 60, v % 60),
         3600..86400 if v.is_multiple_of(3600) => format!("{} h", v / 3600),
-        3600..86400 => format!("{} h {} min", v / 3600, v % 3600 / 60),
+        3600..86400 if v.is_multiple_of(60) => format!("{} h {} min", v / 3600, v % 3600 / 60),
+        // the seconds too, so editing the text reads back the same gap
+        3600..86400 => format!("{} h {} min {} s", v / 3600, v % 3600 / 60, v % 60),
         _ => crate::i18n::tr("1 day").into(),
     }
 }
@@ -2427,8 +2429,7 @@ mod gap_tests {
 
     #[test]
     fn gap_text_reads_back_what_it_shows() {
-        for v in [0.0, 1.0, 12.0, 59.0, 60.0, 90.0, 600.0, 3599.0, 3600.0, 3900.0, 86340.0] {
-            // past an hour the text shows whole minutes
+        for v in [0.0, 1.0, 12.0, 59.0, 60.0, 90.0, 600.0, 3599.0, 3600.0, 3601.0, 3661.0, 3900.0, 7325.0, 86340.0, 86399.0] {
             assert_eq!(parse_gap(&fmt_gap(v)), Some(v), "{}", fmt_gap(v));
         }
         assert_eq!(parse_gap("1 day"), Some(86400.0));
@@ -2449,7 +2450,7 @@ mod gap_tests {
     #[test]
     fn gaps_past_the_slider_read_back_too() {
         // the Assisted Culling slider drags to 10 min; its value field takes up to a day
-        for (v, text) in [(1800.0, "30 min"), (5400.0, "1 h 30 min"), (86400.0, "1 day")] {
+        for (v, text) in [(1800.0, "30 min"), (5400.0, "1 h 30 min"), (3601.0, "1 h 0 min 1 s"), (86400.0, "1 day")] {
             assert_eq!(fmt_gap(v), text);
             assert_eq!(parse_gap(text), Some(v), "{text}");
         }
