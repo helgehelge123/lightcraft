@@ -365,8 +365,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         egui::Slider::new(similarity, 0.70..=0.99)
                             .clamping(egui::SliderClamping::Never)
                             .text(crate::i18n::tr("Burst: how alike (loose … strict)"))
-                            .step_by(0.01)
-                            .fixed_decimals(2),
+                            // a typed 0.995 is kept (whole hundredths would round it to 1.00)
+                            .step_by(0.001)
+                            .min_decimals(2)
+                            .max_decimals(3),
                     );
                     crate::widgets::register(ui.ctx(), "field:cullSimilar", r.rect);
                     clamp_cull_burst(burst_gap, similarity);
@@ -2512,6 +2514,13 @@ mod cull_dialog_tests {
         assert_eq!(burst(&h), (0.0, 1.0));
         type_value(&mut h, "field:cullGap", "1800");
         assert_eq!(burst(&h).0, 1800.0);
+        // a similarity between the slider's hundredths is kept to the thousandth
+        type_value(&mut h, "field:cullSimilar", "0.995");
+        assert_eq!(burst(&h).1, 0.995);
+        type_value(&mut h, "field:cullSimilar", "0.9951");
+        assert_eq!(burst(&h).1, 0.995);
+        type_value(&mut h, "field:cullSimilar", "1.0");
+        assert_eq!(burst(&h).1, 1.0);
         // OK hands them to photo.analyze as typed (it refuses values out of its range)
         let r = h.request("ui.dialog.confirm", json!({}), T);
         assert_eq!(r["ok"], true, "{r}");
