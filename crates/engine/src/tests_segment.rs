@@ -358,6 +358,8 @@ fn the_choice_of_where_ai_masks_run_is_kept() {
     let mut memory = Session::with_demo();
     assert_eq!(memory.execute("segment.settings", &json!({"runOn": "cpu"})).unwrap()["runOn"], "cpu");
     let _ = std::fs::remove_dir_all(dir);
+}
+
 fn face_region(rect: [f64; 4], name: Option<&str>) -> lightcraft_meta::Region {
     let r = lightcraft_geom::Rect { x0: rect[0], y0: rect[1], x1: rect[2], y1: rect[3] };
     lightcraft_meta::Region { rect: r, kind: lightcraft_meta::RegionKind::Face, name: name.map(str::to_string), description: None }
@@ -483,6 +485,8 @@ fn people_masks_with_the_real_model() {
     if photo.is_some() {
         assert_eq!(after, before + 1, "{messages:?}");
     }
+}
+
 #[test]
 fn sky_without_a_model_keeps_legacy_masks_and_accepts_stored_model_results() {
     use lightcraft_develop::{MaskShape, SegMask};

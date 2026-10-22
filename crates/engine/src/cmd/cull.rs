@@ -3,7 +3,7 @@
 //! each group's best, and stack each burst with its best photo on top. Focus is measured on the
 //! subject where one is known (face and pet regions, else the camera's focus point), else on the
 //! frame. Scores are kept on the photos (rules / smart albums: `sharpness`, `bestOfGroup`). Bursts
-//! can be arranged by hand (`photo.moveToBurst`, Window ▸ Bursts); culling run again keeps them.
+//! can be arranged by hand (`photo.moveToBurst`, Window → Bursts); culling run again keeps them.
 
 use lightcraft_catalog::{Analysis, Flag, FocusOn, Op, PhotoId};
 use lightcraft_geom::Rect;
@@ -802,7 +802,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move to Burst",
             [],
             None,
-            "{ids?, burst?: number | \"new\" | null (default: the first photo's burst), index?: place (0 = the pick; default last)} — arrange Assisted Culling's bursts by hand (Window ▸ Bursts): the photos go into that burst at `index`, into a new burst, or (null) out of every burst; reordering within a burst is the same call. A burst left with one photo is no burst. The pick follows the first place: Best of Similar Shots, the Pick flag culling gave the old pick, and the top of the burst's stack. Every burst touched is kept as arranged when culling runs again (`photo.analyze` `resetBursts` forgets it). Photos must have been culled; one undo step → {burst, photos, pick, changed}",
+            "{ids?, burst?: number | \"new\" | null (default: the first photo's burst), index?: place (0 = the pick; default last)} — arrange Assisted Culling's bursts by hand (Window → Bursts): the photos go into that burst at `index`, into a new burst, or (null) out of every burst; reordering within a burst is the same call. A burst left with one photo is no burst. The pick follows the first place: Best of Similar Shots, the Pick flag culling gave the old pick, and the top of the burst's stack. Every burst touched is kept as arranged when culling runs again (`photo.analyze` `resetBursts` forgets it). Photos must have been culled; one undo step → {burst, photos, pick, changed}",
             always,
             move_to_burst
         ),

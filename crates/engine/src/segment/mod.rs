@@ -953,7 +953,7 @@ mod tests {
         // the job after which the model runs on the CPU (the GPU failed) says so
         let mut s = Session::with_demo();
         let notice = Some(worker::GPU_FAILED.to_string());
-        s.segmenter.results.0.send(worker::Outcome { tag: Tag::Prepare, result: Ok(None), superseded: false, notice }).unwrap();
+        s.segmenter.results.0.send(worker::Outcome { tag: Tag::Prepare, source_key: 0, result: Ok(None), superseded: false, notice }).unwrap();
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");
@@ -976,6 +976,7 @@ mod tests {
             tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: None, text: "sky".into() },
             result: Ok(Some(seg_box(16, 0, 0, 16, 8))),
             superseded: false,
+            notice: None,
         };
         let mut d = (*s.develop_of(photo).unwrap()).clone();
         d.geometry.horizontal = 30.0;
@@ -998,6 +999,7 @@ mod tests {
             tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: None, text: "sky".into() },
             result: Ok(Some(seg_box(16, 0, 0, 16, 8))),
             superseded: false,
+            notice: None,
         };
         let mut polled = Polled::default();
         s.apply_outcome(outcome, &mut polled);
@@ -1023,6 +1025,7 @@ mod tests {
             tag: Tag::Detail { photo, mask, comp: 0, shape },
             result: Ok(Some(seg_box(16, 5, 5, 7, 7))),
             superseded: false,
+            notice: None,
         };
         let mut polled = Polled::default();
         s.apply_outcome(outcome, &mut polled);
@@ -1043,6 +1046,7 @@ mod tests {
                 tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: Some("Sky".into()), text: "sky".into() },
                 result,
                 superseded: false,
+            notice: None,
             };
             let mut polled = Polled::default();
             s.apply_outcome(outcome, &mut polled);
