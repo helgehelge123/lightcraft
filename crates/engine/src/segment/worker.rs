@@ -85,6 +85,8 @@ pub struct Job {
     pub cpu: bool,
     /// Which photo and look the request is about (the encode cache's key).
     pub key: u64,
+    /// Identity of the full photo input, including for a detail job whose encode-cache key is zero.
+    pub source_key: u64,
     /// Renders the model input when the cache doesn't hold `key` (always for a detail pass).
     pub render: Option<RenderJob>,
     /// The photo's file, when it is missing on disk (for a clearer error if rendering fails).
@@ -97,6 +99,7 @@ pub struct Job {
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
 pub struct Outcome {
     pub tag: Tag,
+    pub source_key: u64,
     pub result: Result<Option<SegMask>, String>,
     /// A newer request for the same selection came in; this one was skipped.
     pub superseded: bool,
@@ -442,7 +445,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, metal: bool) {
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None });
+            let _ = job.reply.send(Outcome { tag: job.tag, source_key: job.source_key, result: Ok(None), superseded: true, notice: None });
             continue;
         }
         // on candle's GPU: what a retry on the CPU needs (running the job takes them)
@@ -481,7 +484,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, metal: bool) {
         }
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false, notice });
+        let _ = job.reply.send(Outcome { tag: job.tag, source_key: job.source_key, result, superseded: false, notice });
     }
 }
 
@@ -753,7 +756,7 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, cpu: false, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+        Job { dir, cpu: false, key: 1, source_key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
     }
 
     #[test]

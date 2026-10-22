@@ -506,8 +506,14 @@ impl Session {
         let mut d = (*p.develop).clone();
         d.masks.clear();
         let content = crate::media::content_key(p);
+        // Reloaded lens data and camera-profile changes also change the model's rendered input.
+        let lens_key = serde_json::to_string(&p.embedded_lens).unwrap_or_default();
         let mut h = mix(0xcbf2_9ce4_8422_2325, d.hash64());
         h = mix(h, id.0);
+        h = mix(h, crate::camera_profiles::cache_key());
+        for b in lens_key.bytes() {
+            h = mix(h, u64::from(b));
+        }
         for b in content.bytes() {
             h = mix(h, u64::from(b));
         }
@@ -555,7 +561,7 @@ impl Session {
             }
         };
         let cpu = self.segmenter.run_on == RunOn::Cpu;
-        Ok(worker::Job { dir, cpu, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
+        Ok(worker::Job { dir, cpu, key: if region.is_some() { 0 } else { key }, source_key: key, render: Some(render), missing, kind, tag, reply })
     }
 
     /// Send a request and wait for its result (CLI, MCP, tests; or when not in background mode).
@@ -760,7 +766,8 @@ impl Session {
                 self.segment_queue(id, kind, tag, Some(region))?;
             } else {
                 let patch = self.segment_wait(id, kind, Some(region))?;
-                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false, notice: None };
+                let source_key = self.segment_key(id).ok_or("no such photo")?.0;
+                let outcome = worker::Outcome { tag, source_key, result: Ok(patch), superseded: false, notice: None };
                 let mut polled = Polled::default();
                 self.apply_outcome(outcome, &mut polled);
             }
@@ -827,6 +834,22 @@ impl Session {
             return;
         }
         polled.messages.extend(o.notice);
+        let photo = match &o.tag {
+            Tag::Clicks { photo, .. } | Tag::NewPrompt { photo, .. } | Tag::Detail { photo, .. } => Some(*photo),
+            _ => None,
+        };
+        if let Some(photo) = photo
+            && self.segment_key(photo).map(|(key, _)| key) != Some(o.source_key)
+        {
+            if let Tag::Clicks { photo, mask, comp, hint, exclude } = &o.tag {
+                let pending = PendingClicks { photo: *photo, mask: *mask, comp: *comp, hint: hint.clone(), exclude: exclude.clone() };
+                if self.segmenter.pending.as_ref() == Some(&pending) {
+                    self.segmenter.pending = None;
+                }
+            }
+            polled.messages.push("The photo changed while the selection was being computed; try again.".into());
+            return;
+        }
         match o.tag {
             Tag::Wait => {}
             Tag::Prepare => {
@@ -931,6 +954,92 @@ mod tests {
         let l: Vec<f32> =
             (0..side * side).map(|i| if (x0..x1).contains(&(i % side)) && (y0..y1).contains(&(i / side)) { 8.0 } else { -8.0 }).collect();
         SegMask::from_logits(side, &l)
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn stale_prompt_result_does_not_add_a_mask_after_geometry_changes() {
+        let mut s = Session::with_demo();
+        let photo = s.active().unwrap();
+        let source_key = s.segment_key(photo).unwrap().0;
+        let outcome = worker::Outcome {
+            source_key,
+            tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: None, text: "sky".into() },
+            result: Ok(Some(seg_box(16, 0, 0, 16, 8))),
+            superseded: false,
+        };
+        let mut d = (*s.develop_of(photo).unwrap()).clone();
+        d.geometry.horizontal = 30.0;
+        s.set_develop(photo, d, "Perspective").unwrap();
+        let mut polled = Polled::default();
+        s.apply_outcome(outcome, &mut polled);
+        assert!(s.develop_of(photo).unwrap().masks.is_empty(), "a mask computed in the old photo frame must not be applied");
+        assert!(!polled.changed);
+        assert!(polled.messages.iter().any(|m| m.contains("changed")));
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn current_prompt_result_is_applied_without_inference_or_model_weights() {
+        let mut s = Session::with_demo();
+        let photo = s.active().unwrap();
+        let source_key = s.segment_key(photo).unwrap().0;
+        let outcome = worker::Outcome {
+            source_key,
+            tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: None, text: "sky".into() },
+            result: Ok(Some(seg_box(16, 0, 0, 16, 8))),
+            superseded: false,
+        };
+        let mut polled = Polled::default();
+        s.apply_outcome(outcome, &mut polled);
+        assert!(polled.changed && polled.messages.is_empty());
+        assert!(matches!(s.develop_of(photo).unwrap().masks[0].components[0].shape, MaskShape::Prompt { seg: Some(_), .. }));
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn stale_detail_result_does_not_overwrite_an_existing_mask() {
+        let mut s = Session::with_demo();
+        let photo = s.active().unwrap();
+        let seg = seg_box(16, 4, 4, 6, 6);
+        let shape = MaskShape::Prompt { text: "flower".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
+        s.execute("mask.add", &serde_json::json!({"kind":"prompt","text":"flower","seg":seg})).unwrap();
+        let source_key = s.segment_key(photo).unwrap().0;
+        let mask = s.active_mask.unwrap();
+        let mut d = (*s.develop_of(photo).unwrap()).clone();
+        d.orientation = lightcraft_geom::Orientation::Rotate90;
+        s.set_develop(photo, d, "Rotate").unwrap();
+        let outcome = worker::Outcome {
+            source_key,
+            tag: Tag::Detail { photo, mask, comp: 0, shape },
+            result: Ok(Some(seg_box(16, 5, 5, 7, 7))),
+            superseded: false,
+        };
+        let mut polled = Polled::default();
+        s.apply_outcome(outcome, &mut polled);
+        assert!(!polled.changed);
+        assert!(matches!(&s.develop_of(photo).unwrap().masks[0].components[0].shape,MaskShape::Prompt { detail,.. } if detail.is_empty()));
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn sky_prompt_no_match_and_failure_leave_existing_masks_unchanged() {
+        for result in [Ok(None), Err("model inference failed".to_string())] {
+            let mut s = Session::with_demo();
+            let photo = s.active().unwrap();
+            s.execute("mask.add", &serde_json::json!({"kind":"radial"})).unwrap();
+            let before = s.develop_of(photo).unwrap();
+            let outcome = worker::Outcome {
+                source_key: s.segment_key(photo).unwrap().0,
+                tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: Some("Sky".into()), text: "sky".into() },
+                result,
+                superseded: false,
+            };
+            let mut polled = Polled::default();
+            s.apply_outcome(outcome, &mut polled);
+            assert!(!polled.changed && !polled.messages.is_empty());
+            assert_eq!(*s.develop_of(photo).unwrap(), *before);
+        }
     }
 
     #[test]

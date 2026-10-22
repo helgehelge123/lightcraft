@@ -131,6 +131,28 @@ fn people_shape(s: &Session, p: &Value, c: &str) -> Result<MaskShape> {
         (None, None) => return Err(bad(c, "a People mask needs `person` (the index of one of photo.faces) or `face` [x0, y0, x1, y1]")),
     };
     Ok(MaskShape::People { person, parts, face: Some(face), seg, detail: vec![], edge: 0.0 })
+
+/// New Sky selections use the same stored model result as Describe. Old `MaskShape::Sky`
+/// values retain their existing source-matte/heuristic rendering when reopened.
+fn new_shape(s: &Session, kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
+    if kind != "sky" {
+        return shape_from(s, kind, p, c);
+    }
+    let ai = match p.get("ai") {
+        None => s.segmenter.installed() || s.segmenter.remote_endpoint().is_some(),
+        Some(v) => v.as_bool().ok_or_else(|| bad(c, "ai must be true or false"))?,
+    };
+    let seg = match p.get("seg") {
+        None => None,
+        Some(v) => {
+            let seg: lightcraft_develop::SegMask = serde_json::from_value(v.clone()).map_err(|e| bad(c, format!("invalid sky segmentation: {e}")))?;
+            if seg.bounds().is_none() || seg.logits().is_none() {
+                return Err(bad(c, "invalid sky segmentation data"));
+            }
+            Some(seg)
+        }
+    };
+    if ai || seg.is_some() { Ok(MaskShape::Prompt { text: "sky".into(), seg, detail: vec![], edge: 0.0 }) } else { Ok(MaskShape::Sky) }
 }
 
 /// `[[x, y], …]` normalized points under `key`.
@@ -342,13 +364,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt|people, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; people: person (index into photo.faces) or face [x0,y0,x1,y1], parts? [Entire Person|Face Skin|Body Skin|Hair|Clothes, or Skin for both skins] (default the entire person); object/prompt/people: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt or people mask returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt|people, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; sky: ai? (auto when installed; false keeps the approximate/source-matte selection); prompt: text; people: person (index into photo.faces) or face [x0,y0,x1,y1], parts? [Entire Person|Face Skin|Body Skin|Hair|Clothes, or Skin for both skins] (default the entire person); object/prompt/sky/people: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt or people mask returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let mut shape = shape_from(s, &kind, p, "mask.add")?;
+                let mut shape = new_shape(s, &kind, p, "mask.add")?;
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
-                let name = str_param(p, "name").map(str::to_string);
+                let name = str_param(p, "name").map(str::to_string).or_else(|| (kind == "sky").then(|| "Sky".into()));
                 if let Some(pending) = queue_new(s, &later, None, "add", name.clone(), "mask.add")? {
                     return Ok(pending);
                 }
@@ -374,7 +396,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add/Subtract/Intersect Mask",
             [],
             None,
-            "{id?: maskId, op: add|subtract|intersect, kind, ...shape params}",
+            "{id?: maskId, op: add|subtract|intersect, kind, ...shape params (sky: ai?, seg?)}",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("brush").to_string();
@@ -386,7 +408,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
-                let mut shape = shape_from(s, &kind, p, "mask.addComponent")?;
+                let mut shape = new_shape(s, &kind, p, "mask.addComponent")?;
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 let op_name = p.get("op").and_then(Value::as_str).unwrap_or("add");
                 if let Some(pending) = queue_new(s, &later, Some(mid), op_name, None, "mask.addComponent")? {
