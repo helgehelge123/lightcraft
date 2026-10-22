@@ -349,16 +349,27 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
                     crate::widgets::register(ui.ctx(), "check:cullPick", r.rect);
                     ui.add_space(6.0);
+                    // the sliders drag over the usual range; their value fields take whatever
+                    // `photo.analyze` accepts (a gap of 0 s to a day, a similarity of 0 to 1)
                     let r = ui.add(
                         egui::Slider::new(burst_gap, 1.0..=600.0)
                             .logarithmic(true)
+                            .smallest_positive(1.0)
+                            .clamping(egui::SliderClamping::Never)
                             .text(crate::i18n::tr("Burst: shots at most this far apart"))
                             .custom_formatter(|v, _| crate::panels::dialogs::fmt_gap(v))
                             .custom_parser(crate::panels::dialogs::parse_gap),
                     );
                     crate::widgets::register(ui.ctx(), "field:cullGap", r.rect);
-                    let r = ui.add(egui::Slider::new(similarity, 0.70..=0.99).text(crate::i18n::tr("Burst: how alike (loose … strict)")).step_by(0.01).fixed_decimals(2));
+                    let r = ui.add(
+                        egui::Slider::new(similarity, 0.70..=0.99)
+                            .clamping(egui::SliderClamping::Never)
+                            .text(crate::i18n::tr("Burst: how alike (loose … strict)"))
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                    );
                     crate::widgets::register(ui.ctx(), "field:cullSimilar", r.rect);
+                    clamp_cull_burst(burst_gap, similarity);
                     ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
                     ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.")).color(t.text_dim));
                 }
@@ -1625,6 +1636,25 @@ pub fn parse_gap(text: &str) -> Option<f64> {
     seen.then_some(total)
 }
 
+/// The longest burst gap `photo.analyze` accepts: a day.
+pub const MAX_BURST_GAP: f32 = 86_400.0;
+
+/// Keep what was typed in the Assisted Culling value fields within what `photo.analyze` accepts
+/// (a gap of 0 s to a day, a similarity of 0 to 1), not within the sliders' drag range.
+pub fn clamp_cull_burst(gap: &mut f32, similarity: &mut f32) {
+    *gap = if gap.is_finite() { gap.clamp(0.0, MAX_BURST_GAP) } else { 10.0 };
+    *similarity = if similarity.is_finite() { similarity.clamp(0.0, 1.0) } else { 0.93 };
+}
+
+/// The `photo.analyze` parameters of the Assisted Culling dialog, its values as they are.
+pub fn cull_params(reject_below: f32, pick_best: bool, burst_gap: f32, similarity: f32) -> serde_json::Value {
+    let mut p = json!({"pickBest": pick_best, "burstGap": burst_gap, "similarity": similarity});
+    if reject_below > 0.0 {
+        p["rejectBelow"] = json!(reject_below);
+    }
+    p
+}
+
 /// `90` → `1 min 30 s`.
 pub fn fmt_gap(v: f64) -> String {
     let v = v.round() as u64;
@@ -1924,11 +1954,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
         Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));
-            let mut p = json!({"pickBest": pick_best, "burstGap": burst_gap, "similarity": similarity});
-            if *reject_below > 0.0 {
-                p["rejectBelow"] = json!(reject_below);
-            }
-            app.run("photo.analyze", p)
+            app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
@@ -2399,5 +2425,102 @@ mod gap_tests {
         let back = parse_gap(&shown);
         crate::i18n::set_language(crate::i18n::Locale::En);
         assert_eq!((shown.as_str(), back), ("1 Tag", Some(86400.0)));
+    }
+
+    #[test]
+    fn gaps_past_the_slider_read_back_too() {
+        // the Assisted Culling slider drags to 10 min; its value field takes up to a day
+        for (v, text) in [(1800.0, "30 min"), (5400.0, "1 h 30 min"), (86400.0, "1 day")] {
+            assert_eq!(fmt_gap(v), text);
+            assert_eq!(parse_gap(text), Some(v), "{text}");
+        }
+        assert_eq!(parse_gap("1800"), Some(1800.0));
+        assert_eq!(parse_gap("0"), Some(0.0));
+    }
+}
+
+#[cfg(test)]
+mod cull_dialog_tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::{clamp_cull_burst, cull_params};
+    use crate::headless::Headless;
+    use crate::state::Dialog;
+    use crate::{LightcraftApp, Services};
+
+    const T: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn typed_values_are_kept_within_what_photo_analyze_accepts() {
+        for (gap, sim) in [(0.0, 0.0), (1800.0, 1.0), (86400.0, 0.5), (0.5, 0.995)] {
+            let (mut g, mut s) = (gap, sim);
+            clamp_cull_burst(&mut g, &mut s);
+            assert_eq!((g, s), (gap, sim), "in range: kept as typed");
+        }
+        for ((gap, sim), want) in [((-5.0, -0.1), (0.0, 0.0)), ((90000.0, 1.5), (86400.0, 1.0)), ((f32::NAN, f32::INFINITY), (10.0, 0.93))] {
+            let (mut g, mut s) = (gap, sim);
+            clamp_cull_burst(&mut g, &mut s);
+            assert_eq!((g, s), want);
+        }
+        assert_eq!(cull_params(0.0, true, 1800.0, 1.0), json!({"pickBest": true, "burstGap": 1800.0, "similarity": 1.0}));
+        assert_eq!(cull_params(20.0, false, 0.0, 0.7)["rejectBelow"], 20.0);
+    }
+
+    /// Click the value field right of a slider registered as `id`, type `text`, Enter.
+    fn type_value(h: &mut Headless, id: &str, text: &str) {
+        let r = h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("{id} not on screen"));
+        let spacing = h.view.ctx.global_style().spacing.clone();
+        let x = r.left() + spacing.slider_width + spacing.item_spacing.x + 6.0;
+        assert_eq!(h.request("ui.click", json!({"x": x, "y": r.center().y}), T)["ok"], true);
+        h.step();
+        for key in ["a", "Backspace"] {
+            assert_eq!(h.request("ui.key", json!({"key": key, "cmd": key == "a"}), T)["ok"], true);
+        }
+        assert_eq!(h.request("ui.text", json!({"text": text}), T)["ok"], true);
+        assert_eq!(h.request("ui.key", json!({"key": "Enter"}), T)["ok"], true);
+        h.step();
+        h.step();
+    }
+
+    fn burst(h: &Headless) -> (f32, f32) {
+        match &h.app.ui.dialog {
+            Some(Dialog::Cull { burst_gap, similarity, .. }) => (*burst_gap, *similarity),
+            d => panic!("{d:?}"),
+        }
+    }
+
+    #[test]
+    fn the_culling_value_fields_take_values_past_the_sliders() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+        h.step();
+        h.app.run("dialog.cull", json!({})).unwrap();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert_eq!(burst(&h), (10.0, 0.93));
+        // half an hour and "only identical shots": past the sliders' 10 min and 0.99
+        type_value(&mut h, "field:cullGap", "30 min");
+        type_value(&mut h, "field:cullSimilar", "1.0");
+        assert_eq!(burst(&h), (1800.0, 1.0));
+        // a day is as far as photo.analyze goes; more is held there
+        type_value(&mut h, "field:cullGap", "2 days");
+        assert_eq!(burst(&h).0, 86400.0);
+        type_value(&mut h, "field:cullGap", "0");
+        assert_eq!(burst(&h), (0.0, 1.0));
+        type_value(&mut h, "field:cullGap", "1800");
+        assert_eq!(burst(&h).0, 1800.0);
+        // OK hands them to photo.analyze as typed (it refuses values out of its range)
+        let r = h.request("ui.dialog.confirm", json!({}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+        assert_eq!(h.app.ui.cull_burst, Some((1800.0, 1.0)));
+        // and the next opening starts from them, not from the sliders' range
+        h.app.run("dialog.cull", json!({})).unwrap();
+        h.step();
+        h.step();
+        assert_eq!(burst(&h), (1800.0, 1.0));
     }
 }
