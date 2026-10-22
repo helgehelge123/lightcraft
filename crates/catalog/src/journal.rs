@@ -55,6 +55,7 @@
 //! | 10 | culling focus on the subject (#2276) | `Analysis.subject`, `Analysis.focus_on`, `Analysis.frame` |
 //! | 11 | bursts arranged by hand in Assisted Culling | `Analysis.rank` |
 //! | 12 | a mask's local Curve (LR-MASK-CURVE) | `Mask.curve` (in the develop settings' `masks`) |
+//! | 13 | People masks with a SAM 3 selection | `MaskShape::People.face` / `seg` / `detail` / `edge` (in the develop settings' `masks`) |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -79,7 +80,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
