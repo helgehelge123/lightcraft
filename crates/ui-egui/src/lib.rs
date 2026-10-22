@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod album_picker;
+pub mod batch;
 pub mod brush_live;
 pub mod button;
 pub mod canvas_keys;
@@ -449,6 +450,8 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Assisted Culling, Denoise or Find Subjects over many photos, with its progress dialog.
+    pub batch: Option<batch::Batch>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
@@ -544,6 +547,7 @@ impl LightcraftApp {
             lightroom_result: None,
             shown_library: None,
             export: None,
+            batch: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
@@ -1127,6 +1131,7 @@ impl LightcraftApp {
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        batch::tick(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
         self.slideshow_tick(ctx);
@@ -1477,6 +1482,7 @@ impl LightcraftApp {
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
+        batch::show(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);

@@ -95,50 +95,39 @@ fn wants_preview(thumb: &Rgb32f, boxes: &[Rect], full_edge: usize) -> bool {
     boxes.iter().any(|r| lightcraft_pipeline::cull::subject_px(thumb, r) < SUBJECT_MIN_PX) && full_edge > thumb.width.max(thumb.height)
 }
 
-/// Photos `ids` measured side by side on rayon's pool, a batch at a time, results in the order of
-/// `ids`. `job` reads what one needs from the session (serially); `measure` decodes and measures
-/// it off the session and hands back the source to keep at `level`, else what the decode of one
-/// not kept read; the session keeps or learns it as [`Session::source_now`] does before the next
-/// batch starts. A batch is at most a photo per pool thread, and no more than the memory gate's
-/// limit counts for decoding them at `level` ([`crate::files::gate_weight`]): the decodes count
-/// there without waiting (interactive work), so the batch is what keeps them within it.
+/// Photos measured side by side on rayon's pool, a batch at a time, results in the order of
+/// `jobs` (each `(photo, weight, job)`), off the session. A batch is at most a photo per pool
+/// thread, and no more than the memory gate's limit counts for decoding them (each job's `weight`,
+/// [`crate::files::gate_weight`]): the decodes count there without waiting (interactive work), so
+/// the batch is what keeps them within it. `go(done)` is asked before each batch: `false` stops,
+/// and the photos left are not measured.
 fn measure_all<J: Send, R: Send>(
-    s: &mut Session,
-    ids: &[PhotoId],
-    level: SourceLevel,
-    mut job: impl FnMut(&mut Session, PhotoId) -> J,
-    measure: impl Fn(PhotoId, J) -> (R, Option<DecodedSource>, Option<SourceInfo>) + Sync,
+    jobs: Vec<(PhotoId, usize, J)>,
+    measure: impl Fn(PhotoId, J) -> R + Sync,
+    go: &mut dyn FnMut(usize) -> bool,
 ) -> Vec<R> {
     use rayon::prelude::*;
     let (limit, threads) = (crate::memory::work_gate().usage().1, rayon::current_num_threads().max(1));
-    let weight = |s: &Session, id: PhotoId| {
-        s.catalog.photo(id).map_or(0, |p| crate::files::gate_weight(usize::try_from(p.file_size).unwrap_or(usize::MAX), level.max_edge()))
-    };
-    let mut out = Vec::with_capacity(ids.len());
-    let mut rest = ids;
-    while !rest.is_empty() {
-        let (mut n, mut held) = (0, 0usize);
-        while n < rest.len().min(threads) {
-            let w = weight(s, rest[n]);
-            if n > 0 && held.saturating_add(w) > limit {
+    let mut out = Vec::with_capacity(jobs.len());
+    let mut rest = jobs.into_iter().peekable();
+    while rest.peek().is_some() {
+        if !go(out.len()) {
+            break;
+        }
+        let (mut batch, mut held) = (Vec::new(), 0usize);
+        while batch.len() < threads
+            && let Some(next) = rest.peek()
+        {
+            if !batch.is_empty() && held.saturating_add(next.1) > limit {
                 break;
             }
-            (n, held) = (n + 1, held.saturating_add(w));
+            held = held.saturating_add(next.1);
+            batch.extend(rest.next());
         }
-        let (batch, tail) = rest.split_at(n);
-        rest = tail;
-        let jobs: Vec<(PhotoId, J)> = batch.iter().map(|&id| (id, job(s, id))).collect();
         // No deadlock at the memory gate: a decode waits there only as background work
         // (`memory::in_background`, a thread-local the app's render worker threads set, never
         // rayon's), so these decodes, and the parallel loops nested in them, count without waiting.
-        let done: Vec<_> = jobs.into_par_iter().map(|(id, j)| (id, measure(id, j))).collect();
-        for (id, (r, kept, info)) in done {
-            match kept {
-                Some(src) => s.keep_source(id, level, src),
-                None => s.learn_source(id, info.as_ref()),
-            }
-            out.push(r);
-        }
+        out.extend(batch.into_par_iter().map(|(id, _, j)| measure(id, j)).collect::<Vec<_>>());
     }
     out
 }
@@ -159,86 +148,230 @@ struct Row {
     sig: [f32; 64],
 }
 
-fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
+/// What measuring one photo needs, read from the session by [`cull_prepare`].
+struct Job {
+    thumb: std::result::Result<SourceRef, String>,
+    /// Only for a photo with a subject (a small one is measured on it), and its weight at the gate.
+    preview: Option<(SourceRef, usize)>,
+    time: Option<i64>,
+    boxes: Vec<Rect>,
+    kind: FocusOn,
+    full_edge: usize,
+}
+
+/// What `photo.analyze` was asked to do with the scores.
+#[derive(Clone, Copy)]
+struct Params {
+    reject_below: Option<f32>,
+    pick_best: bool,
+    gap: f64,
+    same: f32,
+    stack_groups: bool,
+}
+
+/// Assisted Culling in three steps, so the app measures off its UI thread with a progress dialog
+/// and Cancel: the photos and what measuring them needs, read from the session ([`cull_prepare`]),
+/// measured anywhere ([`CullPlan::measure`]) and applied to the session ([`cull_finish`]).
+/// `photo.analyze` runs all three at once.
+pub struct CullPlan {
+    params: Params,
+    jobs: Vec<(PhotoId, usize, Job)>,
+    library: u64,
+}
+
+/// At most this many measured thumbnails are kept in memory afterwards (as [`Session::source_now`]
+/// keeps them): the last ones measured, so a large run doesn't hold every thumbnail until it ends.
+const KEEP_THUMBS: usize = 256;
+
+/// What [`CullPlan::measure`] found, applied by [`cull_finish`].
+pub struct CullMeasured {
+    params: Params,
+    rows: Vec<Row>,
+    failed: Vec<Value>,
+    kept: std::collections::VecDeque<(PhotoId, DecodedSource)>,
+    learned: Vec<(PhotoId, SourceInfo)>,
+    library: u64,
+    /// Measuring was stopped: nothing is applied.
+    pub cancelled: bool,
+}
+
+/// The photos `photo.analyze {p}` culls (the selected ones, else all in view) and what measuring
+/// them needs; refused before anything is measured when the parameters are wrong.
+pub fn cull_prepare(s: &mut Session, p: &Value) -> Result<CullPlan> {
     let mut ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
     // a photo named twice is measured (and stacked) once
     let mut seen = std::collections::HashSet::new();
     ids.retain(|id| seen.insert(*id));
-    let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
-    let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
     let (gap, same) = burst_params(p)?;
-    let stack_groups = match p.get("stackGroups") {
-        None | Some(Value::Null) => false,
-        Some(v) => v.as_bool().ok_or_else(|| super::bad("photo.analyze", "`stackGroups` must be true or false"))?,
+    let params = Params {
+        reject_below: p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32),
+        pick_best: p.get("pickBest").and_then(Value::as_bool).unwrap_or(false),
+        gap,
+        same,
+        stack_groups: match p.get("stackGroups") {
+            None | Some(Value::Null) => false,
+            Some(v) => v.as_bool().ok_or_else(|| super::bad("photo.analyze", "`stackGroups` must be true or false"))?,
+        },
     };
-    // measure on all cores: thumbnail-level sources (fast, and enough for focus at 512 px), then a
-    // subject too small there on the preview (see `wants_preview`)
-    struct Job {
-        thumb: std::result::Result<SourceRef, String>,
-        time: Option<i64>,
-        boxes: Vec<Rect>,
-        kind: FocusOn,
-        full_edge: usize,
+    let jobs = ids
+        .into_iter()
+        .map(|id| {
+            let thumb = s.source_load(id, SourceLevel::Thumb);
+            let (time, (boxes, kind), full_edge, size) = match s.catalog.photo(id) {
+                Some(ph) => (
+                    ph.captured.as_deref().and_then(secs),
+                    subject_boxes(ph),
+                    ph.width.max(ph.height) as usize,
+                    usize::try_from(ph.file_size).unwrap_or(usize::MAX),
+                ),
+                None => (None, (Vec::new(), FocusOn::Frame), 0, 0),
+            };
+            let weight = |level: SourceLevel| crate::files::gate_weight(size, level.max_edge());
+            let preview =
+                if boxes.is_empty() { None } else { s.source_load(id, SourceLevel::Preview).ok().map(|r| (r, weight(SourceLevel::Preview))) };
+            (id, weight(SourceLevel::Thumb), Job { thumb, preview, time, boxes, kind, full_edge })
+        })
+        .collect();
+    Ok(CullPlan { params, jobs, library: s.library_generation() })
+}
+
+impl CullPlan {
+    /// How many photos are measured.
+    pub fn len(&self) -> usize {
+        self.jobs.len()
     }
-    let job = |s: &mut Session, id: PhotoId| {
-        let thumb = s.source_load(id, SourceLevel::Thumb);
-        let (time, (boxes, kind), full_edge) = match s.catalog.photo(id) {
-            Some(ph) => (ph.captured.as_deref().and_then(secs), subject_boxes(ph), ph.width.max(ph.height) as usize),
-            None => (None, (Vec::new(), FocusOn::Frame), 0),
-        };
-        Job { thumb, time, boxes, kind, full_edge }
-    };
-    let measured = measure_all(s, &ids, SourceLevel::Thumb, job, |id, j: Job| {
-        use lightcraft_pipeline::cull;
-        let src = match j.thumb.and_then(|r| r.load_source()) {
-            Ok(src) => src,
-            Err(e) => return (Err(json!([id.0, e])), None, None),
-        };
-        let (img, frame) = (&src.image, cull::sharpness(&src.image));
-        let row = Row {
-            id,
-            time: j.time,
-            sharp: frame,
-            frame,
-            subject: subject_on(img, &j.boxes),
-            on_preview: false,
-            focus_on: j.kind,
-            clip: cull::clipped(img),
-            sig: cull::signature(img),
-        };
-        let preview = wants_preview(img, &j.boxes, j.full_edge).then_some(j.boxes);
-        (Ok((row, preview)), Some(src), None)
-    });
-    let (mut rows, mut failed, mut small) = (Vec::new(), Vec::new(), Vec::new());
-    for m in measured {
-        match m {
-            Ok((r, Some(boxes))) => {
-                small.push((rows.len(), r.id, boxes));
-                rows.push(r);
+
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
+    }
+
+    /// Decode and measure the photos, on all cores, off the session: thumbnail-level sources (fast,
+    /// and enough for focus at 512 px), then a subject too small there on the preview (see
+    /// `wants_preview`). `progress(done, total)` is asked between batches (the previews add to
+    /// `total` once the thumbnails are done); `false` stops, and nothing is applied.
+    pub fn measure(self, progress: &mut dyn FnMut(usize, usize) -> bool) -> CullMeasured {
+        let CullPlan { params, jobs, library } = self;
+        let total = jobs.len();
+        let mut cancelled = false;
+        let measured = measure_all(
+            jobs,
+            |id, j: Job| {
+                use lightcraft_pipeline::cull;
+                let src = match j.thumb.and_then(|r| r.load_source()) {
+                    Ok(src) => src,
+                    Err(e) => return (Err(json!([id.0, e])), None),
+                };
+                let (img, frame) = (&src.image, cull::sharpness(&src.image));
+                let row = Row {
+                    id,
+                    time: j.time,
+                    sharp: frame,
+                    frame,
+                    subject: subject_on(img, &j.boxes),
+                    on_preview: false,
+                    focus_on: j.kind,
+                    clip: cull::clipped(img),
+                    sig: cull::signature(img),
+                };
+                let preview = j.preview.filter(|_| wants_preview(img, &j.boxes, j.full_edge)).map(|(r, w)| (r, w, j.boxes));
+                (Ok((row, preview)), Some(src))
+            },
+            &mut |done| {
+                let go = progress(done, total);
+                cancelled |= !go;
+                go
+            },
+        );
+        let (mut rows, mut failed, mut small) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut kept, mut learned) = (std::collections::VecDeque::new(), Vec::new());
+        for (m, src) in measured {
+            match m {
+                Ok((r, preview)) => {
+                    if let Some(src) = src {
+                        kept.push_back((r.id, src));
+                        if kept.len() > KEEP_THUMBS
+                            && let Some((id, old)) = kept.pop_front()
+                            && let Some(info) = old.info
+                        {
+                            learned.push((id, info));
+                        }
+                    }
+                    if let Some((r2, w, boxes)) = preview {
+                        small.push((rows.len(), (r.id, w, (r2, boxes))));
+                    }
+                    rows.push(r);
+                }
+                Err(e) => failed.push(e),
             }
-            Ok((r, None)) => rows.push(r),
-            Err(e) => failed.push(e),
+        }
+        if !cancelled && !small.is_empty() {
+            let n = small.len();
+            let (at, jobs): (Vec<usize>, Vec<_>) = small.into_iter().unzip();
+            let scores = measure_all(
+                jobs,
+                |_, (r, bx): (SourceRef, Vec<Rect>)| match r.load_source() {
+                    Ok(pv) => (subject_on(&pv.image, &bx), pv.info),
+                    Err(_) => (None, None),
+                },
+                &mut |done| {
+                    let go = progress(total + done, total + n);
+                    cancelled |= !go;
+                    go
+                },
+            );
+            for (i, (v, info)) in at.into_iter().zip(scores) {
+                let Some(r) = rows.get_mut(i) else { continue };
+                if let Some(info) = info {
+                    learned.push((r.id, info));
+                }
+                if let Some(v) = v {
+                    (r.subject, r.on_preview) = (Some(v), true);
+                }
+            }
+        }
+        for r in &mut rows {
+            r.sharp = r.subject.unwrap_or(r.frame);
+            if r.subject.is_none() {
+                r.focus_on = FocusOn::Frame;
+            }
+        }
+        CullMeasured { params, rows, failed, kept, learned, library, cancelled }
+    }
+}
+
+/// Apply what was measured: the thumbnails kept and what their decodes read, then (unless measuring
+/// was cancelled) the scores, bursts, flags and stacks as one undo step. Photos removed meanwhile
+/// are left out; refused when another library was opened meanwhile.
+pub fn cull_finish(s: &mut Session, m: CullMeasured) -> Result<Value> {
+    if m.library != s.library_generation() {
+        return Err(super::bad("photo.analyze", "another library was opened while the photos were measured: nothing was changed"));
+    }
+    for (id, src) in m.kept {
+        if s.catalog.photo(id).is_some() {
+            s.keep_source(id, SourceLevel::Thumb, src);
         }
     }
-    let on: Vec<PhotoId> = small.iter().map(|m| m.1).collect();
-    let mut boxes = small.iter().map(|m| m.2.clone());
-    let job = |s: &mut Session, id: PhotoId| (s.source_load(id, SourceLevel::Preview).ok(), boxes.next().unwrap_or_default());
-    let scores =
-        measure_all(s, &on, SourceLevel::Preview, job, |_, (r, bx): (Option<SourceRef>, Vec<Rect>)| match r.and_then(|r| r.load_source().ok()) {
-            Some(pv) => (subject_on(&pv.image, &bx), None, pv.info),
-            None => (None, None, None),
-        });
-    for ((i, ..), v) in small.iter().zip(scores) {
-        if let (Some(v), Some(r)) = (v, rows.get_mut(*i)) {
-            (r.subject, r.on_preview) = (Some(v), true);
+    for (id, info) in &m.learned {
+        if s.catalog.photo(*id).is_some() {
+            s.learn_source(*id, Some(info));
         }
     }
-    for r in &mut rows {
-        r.sharp = r.subject.unwrap_or(r.frame);
-        if r.subject.is_none() {
-            r.focus_on = FocusOn::Frame;
-        }
+    if m.cancelled {
+        return Ok(json!({"cancelled": true, "measured": m.rows.len()}));
     }
+    let rows = m.rows.into_iter().filter(|r| s.catalog.photo(r.id).is_some_and(|p| !p.deleted)).collect();
+    apply(s, &m.params, rows, m.failed)
+}
+
+fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
+    let plan = cull_prepare(s, p)?;
+    let measured = plan.measure(&mut |_, _| true);
+    cull_finish(s, measured)
+}
+
+/// Group the measured photos into bursts, mark each burst's best and record it all (one undo step).
+fn apply(s: &mut Session, params: &Params, mut rows: Vec<Row>, failed: Vec<Value>) -> Result<Value> {
+    let Params { reject_below, pick_best, gap, same, stack_groups } = *params;
     // bursts: consecutive (by capture time) look-alike shots
     rows.sort_by_key(|r| (r.time.unwrap_or(i64::MAX), r.id));
     let mut group_of: Vec<Option<u32>> = vec![None; rows.len()];
@@ -381,6 +514,11 @@ fn burst_params(p: &Value) -> Result<(f64, f32)> {
     Ok((num("burstGap", BURST_GAP, MAX_GAP)?, num("similarity", SAME, 1.0)? as f32))
 }
 
+/// What decoding photo `id`'s thumbnail-level source counts for at the memory gate.
+fn thumb_weight(s: &Session, id: PhotoId) -> usize {
+    s.catalog.photo(id).map_or(0, |p| crate::files::gate_weight(usize::try_from(p.file_size).unwrap_or(usize::MAX), SourceLevel::Thumb.max_edge()))
+}
+
 /// Find Similar: photos that look like `id` (signatures from thumbnail-level sources, cached by
 /// content), most similar first; the view is filtered to them.
 fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
@@ -398,18 +536,18 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
     while !todo.is_empty() {
         let mut seen = std::collections::HashSet::new();
         let (now, later): (Vec<_>, Vec<_>) = todo.into_iter().partition(|(_, key)| seen.insert(key.clone()));
-        let ids: Vec<PhotoId> = now.iter().map(|m| m.0).collect();
+        let jobs: Vec<_> = now.iter().map(|(q, _)| (*q, thumb_weight(s, *q), s.source_load(*q, SourceLevel::Thumb))).collect();
+        // (the thumbnails aren't kept: the whole library may be measured)
         let found = measure_all(
-            s,
-            &ids,
-            SourceLevel::Thumb,
-            |s, q| s.source_load(q, SourceLevel::Thumb),
-            |_, r| match r.and_then(|r| r.load_source()) {
-                Ok(src) => (Some(lightcraft_pipeline::cull::signature(&src.image)), Some(src), None),
-                Err(_) => (None, None, None),
+            jobs,
+            |_, r: std::result::Result<SourceRef, String>| match r.and_then(|r| r.load_source()) {
+                Ok(src) => (Some(lightcraft_pipeline::cull::signature(&src.image)), src.info),
+                Err(_) => (None, None),
             },
+            &mut |_| true,
         );
-        for ((_, key), v) in now.into_iter().zip(found) {
+        for ((q, key), (v, info)) in now.into_iter().zip(found) {
+            s.learn_source(q, info.as_ref());
             if let Some(v) = v {
                 s.signatures.insert(key, v);
             }

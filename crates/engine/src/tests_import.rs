@@ -2312,3 +2312,35 @@ fn assisted_culling_never_ranks_subject_scores_from_different_sources() {
     assert_eq!((ra["best"].as_bool(), rb["best"].as_bool()), (Some(true), Some(false)), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Assisted Culling in its three steps, as the app runs it with a progress dialog: measured off the
+/// session with the progress reported, applied afterwards, and nothing changed when it is cancelled.
+#[test]
+fn assisted_culling_in_steps_reports_progress_and_a_cancel_changes_nothing() {
+    use crate::cmd::cull::{cull_finish, cull_prepare};
+    use lightcraft_catalog::PhotoId;
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).take(6).collect();
+    let analysed = |s: &Session| ids.iter().filter(|id| s.catalog.photo(PhotoId(**id)).is_some_and(|p| p.analysis.is_some())).count();
+    assert_eq!(analysed(&s), 0);
+    // cancelled before the first photo
+    let plan = cull_prepare(&mut s, &json!({"ids": ids, "pickBest": true})).unwrap();
+    assert_eq!(plan.len(), ids.len());
+    let measured = plan.measure(&mut |_, _| false);
+    assert!(measured.cancelled);
+    let r = cull_finish(&mut s, measured).unwrap();
+    assert_eq!(r["cancelled"], true, "{r}");
+    assert_eq!(analysed(&s), 0, "a cancelled run changes nothing");
+    // run through: the progress starts at none of the photos, then it is applied
+    let mut seen = Vec::new();
+    let plan = cull_prepare(&mut s, &json!({"ids": ids, "pickBest": true})).unwrap();
+    let measured = plan.measure(&mut |done, total| {
+        seen.push((done, total));
+        true
+    });
+    assert!(!measured.cancelled);
+    assert_eq!(seen.first(), Some(&(0, ids.len())), "{seen:?}");
+    let r = cull_finish(&mut s, measured).unwrap();
+    assert_eq!(r["photos"].as_array().map(Vec::len), Some(ids.len()), "{r}");
+    assert_eq!(analysed(&s), ids.len());
+}

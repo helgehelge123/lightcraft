@@ -1928,7 +1928,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             if *reject_below > 0.0 {
                 p["rejectBelow"] = json!(reject_below);
             }
-            app.run("photo.analyze", p)
+            crate::batch::start_cull(app, p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)

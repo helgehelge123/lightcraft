@@ -57,7 +57,8 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     if now < app.caches.denoise.next_pump {
         return;
     }
-    let watching = matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "denoise");
+    let watching = matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "denoise")
+        || app.batch.as_ref().is_some_and(crate::batch::Batch::wants_denoise);
     let pace = window_pace(app, ctx, now, watching);
     let Ok(v) = app.session.execute("denoise.pump", &json!({"pace": pace})) else { return };
     let c = &mut app.caches.denoise;

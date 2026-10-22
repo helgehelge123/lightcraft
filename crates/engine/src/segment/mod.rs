@@ -181,6 +181,8 @@ struct Settings {
 /// The model (on its worker thread), the download, and AI mask requests in flight.
 pub struct Segmenter {
     pub subjects: subjects::Picker,
+    /// Subject masks being made for several photos.
+    pub subject_batch: subjects::Batch,
     /// Where the `facebook/sam3` files live (set by the app; `None`: no AI masks).
     pub dir: Option<PathBuf>,
     /// The user's list of download mirrors (one base URL per line), if any.
@@ -208,6 +210,7 @@ impl Default for Segmenter {
     fn default() -> Self {
         Segmenter {
             subjects: subjects::Picker::default(),
+            subject_batch: subjects::Batch::default(),
             dir: None,
             mirrors_file: None,
             settings_file: None,

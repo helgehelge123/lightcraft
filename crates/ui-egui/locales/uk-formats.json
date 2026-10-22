@@ -296,5 +296,14 @@
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
-  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} с, кодувальник зображення {encoder:.1} с"
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} с, кодувальник зображення {encoder:.1} с",
+  "{} is still running: wait for it, or cancel it": "{} is still running: wait for it, or cancel it",
+  "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected": "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected",
+  "Photo {n} of {total}: {pct} %": "Photo {n} of {total}: {pct} %",
+  "Denoise cancelled: {ready} of {total} photos done": "Denoise cancelled: {ready} of {total} photos done",
+  "{ready} photos denoised, {failed} failed": "{ready} photos denoised, {failed} failed",
+  "{ready} photos denoised": "{ready} photos denoised",
+  "Describing and selecting: {name}": "Describing and selecting: {name}",
+  "Finding subjects cancelled: {made} Subject masks made": "Finding subjects cancelled: {made} Subject masks made",
+  "{made} Subject masks made, {skipped} skipped, {failed} failed": "{made} Subject masks made, {skipped} skipped, {failed} failed"
 }
