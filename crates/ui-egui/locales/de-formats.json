@@ -298,5 +298,14 @@
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
   "Listing folders — folders: {folders}, files: {files}": "Ordner werden aufgelistet – Ordner: {folders}, Dateien: {files}",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
-  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} s, Bildencoder {encoder:.1} s"
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} s, Bildencoder {encoder:.1} s",
+  "{} is still running: wait for it, or cancel it": "{} läuft noch: warte darauf oder brich es ab",
+  "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected": "Unterstützte Fotoauswahl: {groups} Serien, {picked} ausgewählt, {rejected} abgelehnt",
+  "Photo {n} of {total}: {pct} %": "Foto {n} von {total}: {pct} %",
+  "Denoise cancelled: {ready} of {total} photos done": "Entrauschen abgebrochen: {ready} von {total} Fotos fertig",
+  "{ready} photos denoised, {failed} failed": "{ready} Fotos entrauscht, {failed} fehlgeschlagen",
+  "{ready} photos denoised": "{ready} Fotos entrauscht",
+  "Describing and selecting: {name}": "Beschreiben und auswählen: {name}",
+  "Finding subjects cancelled: {made} Subject masks made": "Motivsuche abgebrochen: {made} Motiv-Masken erstellt",
+  "{made} Subject masks made, {skipped} skipped, {failed} failed": "{made} Motiv-Masken erstellt, {skipped} übersprungen, {failed} fehlgeschlagen"
 }

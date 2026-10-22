@@ -391,6 +391,26 @@ pub fn specs() -> Vec<CommandSpec> {
             s.subject_create().map_err(ai_err)?;
             Ok(json!({"activeMask": s.active_mask}))
         }),
+        cmd!(
+            "mask.subject.batch",
+            "Find Subjects in Selected Photos",
+            [],
+            None,
+            "{ids?: [photoId] (the selected photos)} → {queued} — experimental local BLIP/SAM picker for many photos: one after another, each gets a Subject mask with what the picker chooses first (the sharpest person, else the first thing named); photos with a Subject mask already are skipped. `mask.subject.batchStatus` follows it",
+            always,
+            |s, p| {
+                let ids = s.targets(p)?;
+                let n = s.subject_batch_start(ids).map_err(ai_err)?;
+                Ok(json!({"queued": n}))
+            }
+        ),
+        cmd!(query "mask.subject.batchStatus", "Subject Batch Status", [], None, "{} → {running, total, done, made, skipped, failed: [[id, why]], current, cancelled}", always, |s, _| {
+            s.subject_poll();
+            Ok(s.segmenter.subject_batch.status())
+        }),
+        cmd!(query "mask.subject.batchCancel", "Cancel Subject Batch", [], None, "{} → {cancelled} — stop `mask.subject.batch` (masks made so far stay)", always, |s, _| {
+            Ok(json!({"cancelled": s.subject_batch_cancel()}))
+        }),
         cmd!("mask.subject.dismiss", "Dismiss Subject Picker", [], None, "{} — close without changing masks", always, |s, _| {
             s.segmenter.subjects.open = false;
             Ok(json!({}))

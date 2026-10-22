@@ -3469,5 +3469,15 @@
   "Run on": "Ausführen auf",
   "Automatic (GPU when available)": "Automatisch (GPU, wenn vorhanden)",
   "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Objekt- und Beschreiben-Masken analysieren jedes Foto einmal, auf der Grafikkarte, außer CPU ist gewählt oder „GPU zum Rendern verwenden“ ist aus. Auf dem Prozessor dauert das deutlich länger.",
-  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatisch führt das Modell auf der Grafikkarte des Mac aus. Wählen Sie CPU, wenn KI-Masken dort scheitern; auf dem Prozessor dauern sie deutlich länger."
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatisch führt das Modell auf der Grafikkarte des Mac aus. Wählen Sie CPU, wenn KI-Masken dort scheitern; auf dem Prozessor dauern sie deutlich länger.",
+  "Denoise Selected Photos": "Ausgewählte Fotos entrauschen",
+  "Find Subjects in Selected Photos": "Motive in ausgewählten Fotos finden",
+  "Denoising photos": "Fotos werden entrauscht",
+  "Finding subjects": "Motive werden gesucht",
+  "Hide": "Ausblenden",
+  "Keep it running; it stays in the activity list": "Läuft weiter und bleibt in der Aktivitätsliste",
+  "None of the selected photos is a raw photo AI Denoise applies to": "Keines der ausgewählten Fotos ist ein Raw-Foto, auf das KI-Entrauschen anwendbar ist",
+  "Measuring focus and finding bursts": "Schärfe wird gemessen, Serien werden gesucht",
+  "Assisted Culling stopped unexpectedly: nothing was changed": "Die unterstützte Fotoauswahl wurde unerwartet beendet: nichts wurde geändert",
+  "Assisted Culling cancelled: nothing was changed": "Unterstützte Fotoauswahl abgebrochen: nichts wurde geändert"
 }

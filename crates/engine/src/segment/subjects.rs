@@ -62,12 +62,54 @@ pub struct Picker {
     stage: Option<Stage>,
 }
 
+/// Subject masks for many photos at once (Photo ▸ Find Subjects in Selected Photos): one photo after
+/// another, each described by BLIP and its subjects found on the SAM 3 worker as the picker finds them,
+/// then a Subject mask made from what the picker would have chosen (the sharpest person, else the
+/// first thing named), one undo step per photo. A photo that has a Subject mask already is skipped.
+#[derive(Default)]
+pub struct Batch {
+    pub total: usize,
+    /// Photos finished (made, skipped or failed).
+    pub done: usize,
+    pub made: usize,
+    pub skipped: usize,
+    pub failed: Vec<(PhotoId, String)>,
+    /// The photo being worked on.
+    pub current: Option<PhotoId>,
+    pub cancelled: bool,
+    queue: std::collections::VecDeque<PhotoId>,
+    #[cfg(feature = "sam")]
+    stage: Option<(PhotoId, u64, Stage)>,
+}
+
+impl Batch {
+    pub fn running(&self) -> bool {
+        self.current.is_some() || !self.queue.is_empty()
+    }
+
+    /// `mask.subject.batchStatus`.
+    pub fn status(&self) -> serde_json::Value {
+        serde_json::json!({
+            "running": self.running(),
+            "total": self.total,
+            "done": self.done,
+            "made": self.made,
+            "skipped": self.skipped,
+            "failed": self.failed.iter().map(|(id, why)| serde_json::json!([id.0, why])).collect::<Vec<_>>(),
+            "current": self.current.map(|id| id.0),
+            "cancelled": self.cancelled,
+        })
+    }
+}
+
 /// Most people offered one by one.
 #[cfg(feature = "sam")]
 const MAX_PEOPLE: usize = 8;
 
 impl Session {
     pub fn subject_poll(&mut self) {
+        #[cfg(feature = "sam")]
+        self.subject_batch_poll();
         #[cfg(feature = "sam")]
         {
             use std::sync::mpsc::TryRecvError;
@@ -137,29 +179,12 @@ impl Session {
 
         #[cfg(feature = "sam")]
         {
-            let blip = std::env::var_os("LIGHTCRAFT_BLIP_DIR").map(std::path::PathBuf::from).ok_or(
-                "This prototype needs LIGHTCRAFT_BLIP_DIR pointing to BLIP-base (pytorch_model.bin and vocab.txt). Use Describe or Object meanwhile.",
-            )?;
-            if !blip.join("pytorch_model.bin").is_file() || !blip.join("vocab.txt").is_file() {
-                return Err("BLIP-base files are missing. Use Describe or Object meanwhile.".into());
+            if self.segmenter.subject_batch.running() {
+                return Err("Subjects are being found for several photos: wait for them, or cancel.".into());
             }
-            if !self.segmenter.installed() {
-                return Err("This local prototype needs SAM 3 installed.".into());
-            }
-            let (key, settings) = self.segment_key(id).ok_or("Photo unavailable")?;
-            // the model input, rendered as the SAM 3 worker renders it (same size, look and key)
-            let job = self.preview_job(id, super::INPUT_EDGE, super::INPUT_EDGE, false, &settings).ok_or("Photo unavailable")?;
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::Builder::new()
-                .name("subject-caption".into())
-                .spawn(move || {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| caption(job, &blip)))
-                        .unwrap_or_else(|_| Err("The subject models failed unexpectedly. Please try again.".into()));
-                    let _ = tx.send(result);
-                })
-                .map_err(|e| e.to_string())?;
-            self.segmenter.subjects =
-                Picker { photo: Some(id), open: true, busy: true, background, key, stage: Some(Stage::Caption(rx)), ..Default::default() };
+            let blip = self.subject_models()?;
+            let (key, stage) = self.subject_caption(id, blip)?;
+            self.segmenter.subjects = Picker { photo: Some(id), open: true, busy: true, background, key, stage: Some(stage), ..Default::default() };
             Ok(())
         }
         #[cfg(not(feature = "sam"))]
@@ -186,33 +211,221 @@ impl Session {
             return Err("Choose at least one subject.".into());
         }
         let mut d = (*self.develop_of(id).ok_or("Photo unavailable")?).clone();
-        let mid = d.next_mask_id();
-        let components = chosen
-            .iter()
-            .map(|c| MaskComponent {
-                name: Some(c.label.clone()),
-                op: MaskOp::Add,
-                invert: false,
-                // one person is an Object selection (+ / − clicks and the detail pass refine that person
-                // alone); a phrase stays a Describe selection
-                shape: match c.click {
-                    Some(at) => MaskShape::Object { hint: vec![at], exclude: Vec::new(), seg: Some(c.seg.clone()), detail: Vec::new(), edge: 0.0 },
-                    None => MaskShape::Prompt { text: c.label.clone(), seg: Some(c.seg.clone()), detail: Vec::new(), edge: 0.0 },
-                },
-            })
-            .collect();
-        d.masks.push(Mask {
-            id: mid,
-            name: if picker.background { "Background" } else { "Subject" }.into(),
-            invert: picker.background,
-            components,
-            ..Default::default()
-        });
+        let mid = push_mask(&mut d, &chosen, picker.background);
         self.set_develop(id, d, "Create Subject Selection").map_err(|e| e.to_string())?;
         self.active_mask = Some(mid);
         self.segmenter.subjects.open = false;
         Ok(())
     }
+
+    /// The BLIP-base folder, once both models the picker needs are there.
+    #[cfg(feature = "sam")]
+    fn subject_models(&self) -> Result<std::path::PathBuf, String> {
+        let blip = std::env::var_os("LIGHTCRAFT_BLIP_DIR").map(std::path::PathBuf::from).ok_or(
+            "This prototype needs LIGHTCRAFT_BLIP_DIR pointing to BLIP-base (pytorch_model.bin and vocab.txt). Use Describe or Object meanwhile.",
+        )?;
+        if !blip.join("pytorch_model.bin").is_file() || !blip.join("vocab.txt").is_file() {
+            return Err("BLIP-base files are missing. Use Describe or Object meanwhile.".into());
+        }
+        if !self.segmenter.installed() {
+            return Err("This local prototype needs SAM 3 installed.".into());
+        }
+        Ok(blip)
+    }
+
+    /// Start describing photo `id` with BLIP on a thread of its own: the photo's segmentation key
+    /// (its suggestions are stale once it changes) and the stage that waits for the caption.
+    #[cfg(feature = "sam")]
+    fn subject_caption(&mut self, id: PhotoId, blip: std::path::PathBuf) -> Result<(u64, Stage), String> {
+        let (key, settings) = self.segment_key(id).ok_or("Photo unavailable")?;
+        // the model input, rendered as the SAM 3 worker renders it (same size, look and key)
+        let job = self.preview_job(id, super::INPUT_EDGE, super::INPUT_EDGE, false, &settings).ok_or("Photo unavailable")?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("subject-caption".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| caption(job, &blip)))
+                    .unwrap_or_else(|_| Err("The subject models failed unexpectedly. Please try again.".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| e.to_string())?;
+        Ok((key, Stage::Caption(rx)))
+    }
+
+    /// Find the subjects of photos `ids` one after another and give each a Subject mask (see
+    /// [`Batch`]). Returns how many photos are queued.
+    pub fn subject_batch_start(&mut self, ids: Vec<PhotoId>) -> Result<usize, String> {
+        if self.segmenter.subject_batch.running() {
+            return Err("Subjects are already being found for several photos.".into());
+        }
+        if self.segmenter.subjects.busy {
+            return Err("Wait for the subject picker to finish.".into());
+        }
+        #[cfg(feature = "sam")]
+        {
+            self.subject_models()?;
+            let mut seen = std::collections::HashSet::new();
+            let queue: std::collections::VecDeque<PhotoId> =
+                ids.into_iter().filter(|id| self.catalog.photo(*id).is_some_and(|p| !p.deleted) && seen.insert(*id)).collect();
+            if queue.is_empty() {
+                return Err("Select the photos to find subjects in.".into());
+            }
+            let n = queue.len();
+            self.segmenter.subject_batch = Batch { total: n, queue, ..Default::default() };
+            self.subject_batch_next();
+            Ok(n)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = ids;
+            Err("Subject discovery is unavailable in this build.".into())
+        }
+    }
+
+    /// Stop finding subjects for several photos: the photo being worked on and the ones waiting are
+    /// left without a mask (the masks made so far stay). How many photos were left.
+    pub fn subject_batch_cancel(&mut self) -> usize {
+        let b = &mut self.segmenter.subject_batch;
+        let left = b.queue.len() + usize::from(b.current.is_some());
+        b.queue.clear();
+        b.current = None;
+        // the caption thread and the worker finish on their own; nobody listens to them any more
+        #[cfg(feature = "sam")]
+        {
+            b.stage = None;
+        }
+        b.cancelled |= left > 0;
+        left
+    }
+
+    /// Start on the next photo of the batch, skipping the ones that can't be started.
+    #[cfg(feature = "sam")]
+    fn subject_batch_next(&mut self) {
+        loop {
+            let b = &mut self.segmenter.subject_batch;
+            b.current = None;
+            let Some(id) = b.queue.pop_front() else { return };
+            b.current = Some(id);
+            if self.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.name == "Subject")) {
+                let b = &mut self.segmenter.subject_batch;
+                (b.skipped, b.done) = (b.skipped + 1, b.done + 1);
+                continue;
+            }
+            match self.subject_models().and_then(|blip| self.subject_caption(id, blip)) {
+                Ok((key, stage)) => {
+                    self.segmenter.subject_batch.stage = Some((id, key, stage));
+                    return;
+                }
+                Err(e) => self.subject_batch_failed(id, e),
+            }
+        }
+    }
+
+    #[cfg(feature = "sam")]
+    fn subject_batch_failed(&mut self, id: PhotoId, why: String) {
+        log::info!("subjects of photo {}: {why}", id.0);
+        let b = &mut self.segmenter.subject_batch;
+        b.failed.push((id, why));
+        b.done += 1;
+    }
+
+    /// Take in what the batch's caption thread or the SAM 3 worker has finished (every frame).
+    #[cfg(feature = "sam")]
+    fn subject_batch_poll(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        let Some((id, key, stage)) = self.segmenter.subject_batch.stage.take() else { return };
+        let changed = |s: &Session| s.segment_key(id).map(|x| x.0) != Some(key);
+        let outcome: Result<(), String> = match stage {
+            Stage::Caption(rx) => match rx.try_recv() {
+                Err(TryRecvError::Empty) => {
+                    self.segmenter.subject_batch.stage = Some((id, key, Stage::Caption(rx)));
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => Err("The subject worker stopped.".into()),
+                Ok(Err(e)) => Err(e),
+                Ok(Ok(_)) if changed(self) => Err("The photo changed while its subjects were found.".into()),
+                Ok(Ok((labels, _))) if labels.is_empty() => Err("BLIP named nothing to select.".into()),
+                Ok(Ok((labels, image))) => {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    // (the job's own outcome carries nothing: nobody listens to it)
+                    let (outcome, _) = std::sync::mpsc::channel();
+                    let job = self.segment_job(id, super::worker::Kind::Subjects { labels, reply: tx }, super::Tag::Wait, outcome, None);
+                    match job.and_then(|job| self.segmenter.worker.submit(job)) {
+                        Ok(()) => {
+                            self.segmenter.subject_batch.stage = Some((id, key, Stage::Segment(rx, image)));
+                            return;
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            },
+            Stage::Segment(rx, image) => match rx.try_recv() {
+                Err(TryRecvError::Empty) => {
+                    self.segmenter.subject_batch.stage = Some((id, key, Stage::Segment(rx, image)));
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => Err("The SAM 3 worker stopped.".into()),
+                Ok(Err(e)) => Err(e),
+                Ok(Ok(_)) if changed(self) => Err("The photo changed while its subjects were found.".into()),
+                Ok(Ok(found)) => self.subject_batch_mask(id, candidates(&image, found)),
+            },
+        };
+        match outcome {
+            Ok(()) => {
+                let b = &mut self.segmenter.subject_batch;
+                (b.made, b.done) = (b.made + 1, b.done + 1);
+            }
+            Err(e) => self.subject_batch_failed(id, e),
+        }
+        self.subject_batch_next();
+    }
+
+    /// Photo `id`'s Subject mask from its `candidates`: the ones the picker chooses at first (the
+    /// sharpest person), else the first thing named.
+    #[cfg(feature = "sam")]
+    fn subject_batch_mask(&mut self, id: PhotoId, candidates: Vec<Candidate>) -> Result<(), String> {
+        let mut chosen: Vec<&Candidate> = candidates.iter().filter(|c| c.selected).collect();
+        if chosen.is_empty() {
+            chosen.extend(candidates.first());
+        }
+        if chosen.is_empty() {
+            return Err("No subject could be selected.".into());
+        }
+        let mut d = (*self.develop_of(id).ok_or("Photo unavailable")?).clone();
+        let mid = push_mask(&mut d, &chosen, false);
+        self.set_develop(id, d, "Create Subject Selection").map_err(|e| e.to_string())?;
+        if self.active() == Some(id) {
+            self.active_mask = Some(mid);
+        }
+        Ok(())
+    }
+}
+
+/// Add the mask made of the `chosen` selections to `d` (a Background mask inverts them); its id.
+fn push_mask(d: &mut lightcraft_develop::DevelopSettings, chosen: &[&Candidate], background: bool) -> u32 {
+    let mid = d.next_mask_id();
+    let components = chosen
+        .iter()
+        .map(|c| MaskComponent {
+            name: Some(c.label.clone()),
+            op: MaskOp::Add,
+            invert: false,
+            // one person is an Object selection (+ / − clicks and the detail pass refine that person
+            // alone); a phrase stays a Describe selection
+            shape: match c.click {
+                Some(at) => MaskShape::Object { hint: vec![at], exclude: Vec::new(), seg: Some(c.seg.clone()), detail: Vec::new(), edge: 0.0 },
+                None => MaskShape::Prompt { text: c.label.clone(), seg: Some(c.seg.clone()), detail: Vec::new(), edge: 0.0 },
+            },
+        })
+        .collect();
+    d.masks.push(Mask {
+        id: mid,
+        name: if background { "Background" } else { "Subject" }.into(),
+        invert: background,
+        components,
+        ..Default::default()
+    });
+    mid
 }
 
 /// Render the model input and describe it with BLIP: the phrases to look for.

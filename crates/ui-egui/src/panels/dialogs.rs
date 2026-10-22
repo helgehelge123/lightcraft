@@ -1975,7 +1975,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             let mut p = cull_params(*reject_below, *pick_best, *burst_gap, *similarity);
             p["stackGroups"] = json!(stack_groups);
             p["resetBursts"] = json!(reset_bursts);
-            app.run("photo.analyze", p)
+            crate::batch::start_cull(app, p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)

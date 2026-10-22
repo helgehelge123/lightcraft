@@ -637,6 +637,64 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"deleted": files, "bytes": bytes}))
 }
 
+/// AI Denoise for many photos at once (Photo ▸ Denoise Selected Photos): turned on (50% for a photo that never had an
+/// Amount) for every raw photo among them in one undo step, and their pictures queued; photos it doesn't apply to are
+/// skipped. `denoise.batchStatus {ids: photos}` then tells how far they are.
+fn batch(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "denoise.batch";
+    s.denoise_refresh_active(true);
+    if s.denoise.active.is_none() {
+        return Err(bad(C, "AI Denoise needs a model: install one in Settings > AI Denoise"));
+    }
+    if s.denoise_products_dir().is_none() {
+        return Err(bad(C, "denoise keeps its pictures in the library's folder: open a library on disk first"));
+    }
+    s.end_interaction()?;
+    let mut seen = std::collections::HashSet::new();
+    let (mut photos, mut skipped, mut ops) = (Vec::new(), 0usize, Vec::new());
+    for id in s.targets(p)? {
+        if !seen.insert(id) {
+            continue;
+        }
+        let usable = s.catalog.photo(id).is_some_and(|ph| !ph.deleted && crate::denoise::eligible(ph));
+        let Some(mut d) = s.develop_of(id).filter(|d| usable && d.enhance.denoise.is_finite()).map(|d| (*d).clone()) else {
+            skipped += 1;
+            continue;
+        };
+        let amount = if d.enhance.denoise <= 0.0 { 50.0 } else { d.enhance.denoise };
+        if d.enhance.denoise != amount || d.enhance.denoise_on != Some(true) {
+            d.enhance.denoise = amount;
+            d.enhance.denoise_on = Some(true);
+            ops.extend(s.develop_op(id, d, "AI Denoise"));
+        }
+        photos.push(id);
+    }
+    if !ops.is_empty() {
+        s.commit("AI Denoise", lightcraft_catalog::Op::Batch { ops })?;
+    }
+    let queued = s.denoise_enqueue(&photos, false, bool_or(p, "retry", true));
+    Ok(json!({"photos": photos.iter().map(|id| id.0).collect::<Vec<_>>(), "queued": queued, "skipped": skipped}))
+}
+
+/// How far photos `ids` are (`denoise.batch`'s): made, failed (or dropped from the queue), still waiting, and the one being made.
+fn batch_status(s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::denoise::PhotoState;
+    let ids = ids_param(p).ok_or_else(|| bad("denoise.batchStatus", "`ids` must be photo ids"))?;
+    let (mut ready, mut failed, mut waiting, mut running) = (0usize, 0usize, 0usize, Value::Null);
+    for id in &ids {
+        match s.denoise_photo_state(*id) {
+            PhotoState::Ready => ready += 1,
+            PhotoState::Queued { .. } => waiting += 1,
+            PhotoState::Running { done, total } => {
+                waiting += 1;
+                running = json!({"photo": id.0, "done": done, "total": total});
+            }
+            PhotoState::NotApplicable | PhotoState::NoModel | PhotoState::Failed { .. } | PhotoState::Idle => failed += 1,
+        }
+    }
+    Ok(json!({"total": ids.len(), "ready": ready, "failed": failed, "waiting": waiting, "running": running}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
@@ -659,6 +717,16 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle
         ),
         cmd!(query "denoise.queue", "Denoise Photos", [], None, "{ids?: [photoId], scope?: selected | visible | withAmount, retry?: false} → {added, …status} — make the denoised pictures of raw photos that have none, in the background. `retry` tries photos that failed before", always, queue),
+        cmd!(
+            "denoise.batch",
+            "Denoise Selected Photos",
+            [],
+            None,
+            "{ids?: [photoId] (the selected photos), retry?: true} → {photos, queued, skipped} — turn AI Denoise on for every raw photo among them (50% where there was no Amount; one undo step) and make their pictures in the background; `denoise.batchStatus {ids: photos}` follows them. Needs an installed model",
+            always,
+            batch
+        ),
+        cmd!(query "denoise.batchStatus", "Denoise Batch Status", [], None, "{ids: [photoId]} → {total, ready, failed, waiting, running: {photo, done, total} | null} — how far `denoise.batch`'s photos are (failed counts photos dropped from the queue)", always, batch_status),
         cmd!(query "denoise.cancel", "Cancel Denoise", [], None, "{id?, all?} → {cancelled} — stop the photo being made and/or forget the ones waiting (all of them when `id` is omitted)", always, cancel),
         cmd!(query "denoise.status", "Denoise Status", [], None, "{id?} → {enabled, model, runtime, productsDir, queued, running: {photo, done, total, seconds} | null, ready, made, auto, runOn, device: {kind: gpu | cpu | pending | none, adapter?, reason?, cardMs?, cpuMs?, fellBack?, remote?: {address, state: pending | unavailable | used | idle | slower | given up, device?, remoteMs?, localMs?, reason?, failures?, lastError?}}, cache: {files, bytes, limitBytes}, generation, photo?: {state: notApplicable | noModel | ready | queued | running | failed | idle, …}}", always, status),
         cmd!(query "denoise.pump", "Denoise Pump", [], None, "{pace?: pause | light | normal | full} → {active, running, queued, ready, generation, downloading} — called every frame by the app: takes in finished work and keeps one photo going", always, pump),
