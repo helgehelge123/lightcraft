@@ -838,6 +838,70 @@ mod tests {
         assert!(egui::Popup::is_any_open(&h.view.ctx), "its context menu");
     }
 
+    /// #1877: a right-click while another photo's context menu is open closes that menu and
+    /// opens this photo's, which stays open (it flashed and closed again).
+    #[test]
+    fn right_clicking_elsewhere_moves_the_context_menu() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        let thumbs: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).collect();
+        let (Some(a), Some(b)) = (thumbs.first().cloned(), thumbs.get(1).cloned()) else { panic!("two grid photos: {thumbs:?}") };
+        let popup = |w: &str| {
+            let id: u64 = w.trim_start_matches("thumb:").parse().expect("a photo id");
+            egui::Id::new(("cell", id)).with("popup")
+        };
+        assert!(!egui::Popup::is_any_open(&h.view.ctx));
+        let r = h.request("ui.clickWidget", json!({"id": a, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "the first photo's menu is open");
+        // A real click: the press and the release reach the UI on different frames, with the
+        // pointer resting on the photo in between (`ui.clickWidget` sends both on one frame).
+        let rect = h.app.widgets.iter().find(|(w, _)| *w == b).map(|(_, r)| *r).expect("the second photo on screen");
+        let at = egui::pos2(rect.left() + rect.width() * 0.9, rect.center().y);
+        let button = egui::PointerButton::Secondary;
+        let modifiers = egui::Modifiers::NONE;
+        h.app.synthetic.push(egui::Event::PointerMoved(at));
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers });
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
+        // one frame at a time: the menu flashed for a frame or two before it closed
+        for frame in 0..6 {
+            h.step();
+            assert!(!egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "frame {frame}: the first photo's menu closed");
+            if frame > 0 {
+                assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the second photo's menu is open");
+            }
+        }
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the second photo's menu stays open");
+        // The same photo again, elsewhere on it (the menu that is open belongs to this very
+        // widget): the menu moves to the pointer and stays.
+        let before = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+        let at = egui::pos2(rect.left() + rect.width() * 0.2, rect.center().y);
+        h.app.synthetic.push(egui::Event::PointerMoved(at));
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers });
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
+        for frame in 0..6 {
+            h.step();
+            if frame > 0 {
+                assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the menu is open after a right-click on the same photo");
+            }
+        }
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the menu stays open");
+        let after = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+        assert!((after.left() - at.x).abs() < 4.0, "the menu moved to the pointer: {after:?} vs {at:?} (was {before:?})");
+    }
+
     /// #1171: Up / Down in the grid go to the cell above / below; in the filmstrip, one photo.
     #[test]
     fn up_and_down_move_through_the_grid_rows() {
@@ -1787,6 +1851,67 @@ mod tests {
         h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), t);
         h.step();
         assert!(h.app.hover_preview.is_none(), "the applied profile is shown, not the last hovered one");
+    }
+
+    /// The preset applied to a photo is still marked (and its Amount slider back) after visiting
+    /// another photo, which shows none (issue #2392); an edit to the photo drops the mark.
+    #[test]
+    fn applied_preset_is_marked_again_on_returning_to_the_photo() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.presets"}), t);
+        h.settle(SETTLE);
+        let a = h.app.session.active().unwrap();
+        let b = h.app.session.visible_cloned().into_iter().find(|id| *id != a).unwrap();
+        let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
+        let marked = |h: &Headless| {
+            let r = h.app.widgets.iter().find(|(id, _)| id == "presetApplied").map(|(_, r)| *r)?;
+            h.app.widgets.iter().find(|(id, wr)| id.starts_with("preset:") && *wr == r).map(|(id, _)| id.clone())
+        };
+        let r = h.request("ui.clickWidget", json!({"id": "preset:lc.warm-glow"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(marked(&h).as_deref(), Some("preset:lc.warm-glow"));
+        assert!(has(&h, "slider:presetAmount"));
+        for (photo, want) in [(b, None), (a, Some("preset:lc.warm-glow"))] {
+            h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [photo.0]}}), t);
+            h.settle(SETTLE);
+            h.step();
+            assert_eq!(marked(&h).as_deref(), want, "on photo {photo:?}");
+            assert_eq!(has(&h, "slider:presetAmount"), want.is_some(), "the Amount slider follows the mark");
+        }
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), t);
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(marked(&h), None, "an edit after the preset drops the mark");
+    }
+
+    /// A preset applied while the active photo lies outside the selection changes only the
+    /// selection, so the active photo isn't marked as having it.
+    #[test]
+    fn applied_preset_is_not_marked_on_an_active_photo_outside_the_selection() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.presets"}), t);
+        h.settle(SETTLE);
+        let a = h.app.session.active().unwrap();
+        let b = h.app.session.visible_cloned().into_iter().find(|id| *id != a).unwrap();
+        h.app.session.selection.ids = vec![b];
+        h.app.session.selection.active = Some(a);
+        let before = h.app.session.develop_of(a).unwrap();
+        let r = h.request("ui.clickWidget", json!({"id": "preset:lc.warm-glow"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(h.app.session.active(), Some(a));
+        assert!(*h.app.session.develop_of(a).unwrap() == *before, "the active photo wasn't changed");
+        assert!(!h.app.widgets.iter().any(|(id, _)| id == "presetApplied"), "nor marked");
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [b.0]}}), t);
+        h.settle(SETTLE);
+        h.step();
+        assert!(h.app.widgets.iter().any(|(id, _)| id == "presetApplied"), "the selected photo is");
     }
 
     /// Presets column: resting on a preset previews it in the loupe without a history entry;
@@ -3336,6 +3461,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Browsing a folder from the UI (read on a worker thread) records it as browsed, as `library.browse` does:
+    /// untouched Local photos are only forgotten from folders not browsed for the set number of days.
+    #[test]
+    fn browsing_from_the_ui_records_the_folder() {
+        let mut h = demo([1200.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-browse-stamp-{}", std::process::id()));
+        let day = dir.join("2026/10/14");
+        std::fs::create_dir_all(&day).unwrap();
+        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+        let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(day.join("a.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+        let root = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+        let day_s = day.to_string_lossy().to_string();
+        assert!(h.app.session.catalog.last_browsed(&root).is_none());
+        let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": root, "subfolders": true}}), t);
+        assert_eq!(r["result"]["scanning"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.visible_cloned().len(), 1);
+        assert!(h.app.session.catalog.last_browsed(&root).is_some(), "the browsed folder");
+        assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "the folder its photo is in");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Browsing a folder again from the sidebar forgets the untouched Local records of files deleted from it by
     /// another app, as `library.browse` does (issue #1392).
     #[test]
@@ -4432,6 +4581,34 @@ mod tests {
                 assert!(painted.iter().any(|text| text == expected), "{painted:?}");
             }
         }
+    }
+
+    /// ⌘J opens View ▸ View Options; its menus choose Info 1's and Info 2's lines, Use Defaults puts
+    /// them back, and `view.viewOptions` sets them for an agent (refusing a line it doesn't know).
+    #[test]
+    fn view_options_choose_the_info_overlay_lines() {
+        use crate::state::{LoupeInfo, LoupeInfoField as F};
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        assert_eq!(h.request("ui.key", json!({"key": "j", "cmd": true}), t)["ok"], true);
+        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ViewOptions));
+        h.step();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "combo:viewOptionsInfo1Line2"}), t)["ok"], true);
+        h.step();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:viewOptionsInfo1Line2-lens"}), t)["ok"], true);
+        h.step();
+        assert_eq!(h.app.ui.settings.loupe_info.info1, [F::FileName, F::Lens, F::Dimensions]);
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:viewOptionsDefaults1"}), t)["ok"], true);
+        h.step();
+        assert_eq!(h.app.ui.settings.loupe_info.info1, LoupeInfo::INFO1);
+
+        let r = h.request("engine.execute", json!({"command": "view.viewOptions", "params": {"info2": ["camera", "none", "fileName"]}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(h.app.ui.settings.loupe_info.info2, [F::Camera, F::None, F::FileName]);
+        let r = h.request("engine.execute", json!({"command": "view.viewOptions", "params": {"info2": ["rating", "none", "none"]}}), t);
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(h.app.ui.settings.loupe_info.info2, [F::Camera, F::None, F::FileName], "a refused change changes nothing");
     }
 
     /// A click on the image zooms to the chosen click-zoom ratio (1:1 by default), animating the

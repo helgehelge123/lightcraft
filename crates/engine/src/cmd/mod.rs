@@ -193,6 +193,32 @@ pub(crate) fn names_photos(p: &Value) -> bool {
     ["ids", "id"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()))
 }
 
+/// The photos `ids` names: `None` when it is missing or null (the command then falls back to the
+/// selection, or its own default), else every entry as a photo id. An `ids` that isn't a list of
+/// whole numbers is an error, never `None`: falling back would act on the selection instead of
+/// the photos the call meant (`{"ids": 3}`, `{"ids": ["3"]}`).
+pub(crate) fn photo_ids(p: &Value, cmd: &str) -> Result<Option<Vec<lightcraft_catalog::PhotoId>>> {
+    match p.get("ids") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_u64().map(lightcraft_catalog::PhotoId).ok_or_else(|| bad(cmd, "`ids` must be photo ids (whole numbers)")))
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
+        Some(_) => Err(bad(cmd, "`ids` must be a list of photo ids")),
+    }
+}
+
+/// The photo `id` names: `None` when it is missing or null (the command then uses the active
+/// photo), else that id. An `id` that isn't a whole number is an error, never `None`: falling back
+/// would act on the active photo instead of the one the call meant (`{"id": "5"}`).
+pub(crate) fn photo_id(p: &Value, cmd: &str) -> Result<Option<lightcraft_catalog::PhotoId>> {
+    match p.get("id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().map(|n| Some(lightcraft_catalog::PhotoId(n))).ok_or_else(|| bad(cmd, "`id` must be a photo id (a whole number)")),
+    }
+}
+
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
