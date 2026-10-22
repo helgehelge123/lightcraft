@@ -1205,6 +1205,7 @@
   "Refresh View": "Ansicht aktualisieren",
   "Reject": "Ablehnen",
   "Reject below focus": "Unter Schärfegrenzwert ablehnen",
+  "Stack each burst, best photo on top": "Jede Serie stapeln, bestes Foto oben",
   "Burst: shots at most this far apart": "Serie: Aufnahmen höchstens so weit auseinander",
   "Burst: how alike (loose … strict)": "Serie: wie ähnlich (locker … streng)",
   "Focus is measured on the faces (or pets) of a photo where they are known, else on the camera's focus point, else on the whole frame. Run Detect Faces first to score the subject.": "Die Schärfe wird auf den Gesichtern (oder Tieren) eines Fotos gemessen, wo sie bekannt sind, sonst am Fokuspunkt der Kamera, sonst im ganzen Bild. Für die Motivschärfe zuerst „Gesichter erkennen“ ausführen.",

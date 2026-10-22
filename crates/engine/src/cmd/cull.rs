@@ -1,8 +1,8 @@
 //! Assisted culling: score photos for focus and clipping, group similar shots taken close
 //! together (bursts) and mark the sharpest of each group; optionally reject blurry ones and pick
-//! each group's best. Focus is measured on the subject where one is known (face and pet regions,
-//! else the camera's focus point), else on the frame. Scores are kept on the photos (rules / smart
-//! albums: `sharpness`, `bestOfGroup`).
+//! each group's best, and stack each burst with its best photo on top. Focus is measured on the
+//! subject where one is known (face and pet regions, else the camera's focus point), else on the
+//! frame. Scores are kept on the photos (rules / smart albums: `sharpness`, `bestOfGroup`).
 
 use lightcraft_catalog::{Analysis, Flag, FocusOn, Op, PhotoId};
 use lightcraft_geom::Rect;
@@ -115,13 +115,17 @@ struct Row {
 }
 
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
-    // a photo listed twice is one photo, not a burst of two look-alikes (first occurrence kept)
+    let mut ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    // a photo named twice is measured (and stacked) once
     let mut seen = std::collections::HashSet::new();
-    let ids: Vec<PhotoId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+    ids.retain(|id| seen.insert(*id));
     let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
     let (gap, same) = burst_params(p)?;
+    let stack_groups = match p.get("stackGroups") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| super::bad("photo.analyze", "`stackGroups` must be true or false"))?,
+    };
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px; a small subject is
     // measured on the preview)
     let mut rows: Vec<Row> = Vec::new();
@@ -231,10 +235,55 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             "best": is_best,
         }));
     }
+    let mut stacks = 0;
+    if stack_groups {
+        // Photos already in a stack stay where they are (like `stack.auto`): a burst is stacked
+        // from its other photos when two or more remain, with the sharpest of those on top.
+        let index = s.catalog.stack_index();
+        let mut members: std::collections::BTreeMap<u32, Vec<(PhotoId, f32)>> = Default::default();
+        for (i, g) in group_of.iter().enumerate() {
+            if let (Some(g), Some(r)) = (g, rows.get(i))
+                && !index.contains_key(&r.id)
+                && s.catalog.photo(r.id).is_some_and(|ph| !ph.deleted)
+            {
+                // the group's best goes on top (ranked as `best` was, subject or frame)
+                let top = best.get(g).is_some_and(|b| b.0 == i);
+                members.entry(*g).or_default().push((r.id, if top { f32::INFINITY } else { r.sharp }));
+            }
+        }
+        for group in members.values() {
+            let Some(top) = group.iter().fold(None::<(PhotoId, f32)>, |b, m| if b.is_none_or(|b| m.1 > b.1) { Some(*m) } else { b }) else {
+                continue;
+            };
+            let photos: Vec<PhotoId> = group.iter().map(|m| m.0).collect();
+            if photos.len() >= 2
+                && let Some(op) = s.catalog.group_ops(top.0, &photos, true)
+            {
+                ops.push(op);
+                stacks += 1;
+            }
+        }
+    }
     if !ops.is_empty() {
         s.commit("Assisted Culling", Op::Batch { ops })?;
     }
-    Ok(json!({"photos": out, "groups": best.len(), "rejected": rejected, "picked": picked, "failed": failed}))
+    if stacks > 0 {
+        // a photo now hidden inside a collapsed stack must not stay the active one: its stack's
+        // top takes over, and the rest of the selection (what was culled) stays selected
+        let vis = s.visible_cloned();
+        if let Some(a) = s.selection.active
+            && !vis.contains(&a)
+            && let Some(st) = s.catalog.stack_of(a)
+        {
+            let top = vis.iter().copied().find(|p| st.photos.contains(p)).unwrap_or(st.top());
+            s.selection.ids.retain(|id| vis.contains(id));
+            if !s.selection.ids.contains(&top) {
+                s.selection.ids.push(top);
+            }
+            s.selection.active = Some(top);
+        }
+    }
+    Ok(json!({"photos": out, "groups": best.len(), "stacks": stacks, "rejected": rejected, "picked": picked, "failed": failed}))
 }
 
 /// `burstGap` (seconds, 0..=a day) and `similarity` (0..=1) of `photo.analyze`, refused before
@@ -303,7 +352,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step. Focus is measured on the subject where one is known — the photo's face and pet regions (run `faces.detect` first), else the camera's focus point — and on the whole frame (its sharpest areas) otherwise; `sharpness` is the score used, so `rejectBelow`, the best of a group and the `sharpness` / `bestOfGroup` rules go by the subject (a group whose shots don't all have a subject score measured on the same source — thumbnail, or the preview for a small subject — is compared on the frames) → {photos: [{id, sharpness, subject (null when not measured), focusOn: \"face\"|\"focusPoint\"|\"frame\", measuredOn: \"thumbnail\"|\"preview\"|null, frame, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, stackGroups?: bool (false; stacks each burst, best on top), burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step. Focus is measured on the subject where one is known — the photo's face and pet regions (run `faces.detect` first), else the camera's focus point — and on the whole frame (its sharpest areas) otherwise; `sharpness` is the score used, so `rejectBelow`, the best of a group and the `sharpness` / `bestOfGroup` rules go by the subject (a group whose shots don't all have a subject score measured on the same source — thumbnail, or the preview for a small subject — is compared on the frames) → {photos: [{id, sharpness, subject (null when not measured), focusOn: \"face\"|\"focusPoint\"|\"frame\", measuredOn: \"thumbnail\"|\"preview\"|null, frame, clipped, group, best}], groups, rejected, picked}",
             always,
             analyze
         ),
