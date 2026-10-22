@@ -2808,8 +2808,9 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         if touches(&target, r, clip) && moving != Some(i) {
             draw_spot(p, &target, band, light, false, sel);
         }
+        // content-aware spots (Remove) have no source to show
         let Some(&tq) = target.first() else { continue };
-        if let Some(o) = s.source_offset.filter(|_| sel) {
+        if let Some(o) = s.source_offset.filter(|_| sel && !s.mode.content_aware()) {
             let source: Vec<Pos2> = s.points.iter().map(|q| map.screen(Point::new(q.x + o.x, q.y + o.y))).collect();
             if touches(&source, r, clip) {
                 draw_spot(p, &source, band, Stroke::new(1.0, Color32::from_white_alpha(150)), true, false);
