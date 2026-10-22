@@ -60,6 +60,13 @@ pub enum Gesture {
     Guide {
         a: Point,
     },
+    /// Guided Upright: dragging the endpoint `end` (0 = `guide.0`, 1 = `guide.1`) of guide `i`,
+    /// from where the pointer went down (`from` — egui forgets the press origin at the release).
+    GuideEndpoint {
+        i: usize,
+        end: usize,
+        from: Pos2,
+    },
     /// Red Eye: an ellipse being dragged from corner `a` (normalized).
     Eye {
         a: Point,
@@ -575,6 +582,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // a pinch changes the zoom every frame: keep the sizes of before it until it is quiet
     let plan = app.size_hold.apply(id, now, navigating, plan);
+    // the drawn size in pixels, clamped first: a NaN or negative float must not become a size
+    let drawn_px = |points: f32| (points * ppp).round().clamp(0.0, 65_536.0) as usize;
+    let fit_px = app.size_hold.display_fit(now, navigating, [drawn_px(target_rect.width()), drawn_px(target_rect.height())]);
     if app.size_hold.holding(now) {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::region::HOLD_SECS));
     }
@@ -603,11 +613,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // at rest the render is shrunk to exactly the size it is drawn at with a Lanczos filter on
         // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
         // sampling (the render is up to a 64 px step larger, or the preview level)
-        let job = if interacting {
-            job
-        } else {
-            job.with_display_fit((target_rect.width() * ppp).round() as usize, (target_rect.height() * ppp).round() as usize)
-        };
+        let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
@@ -626,7 +632,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let hover_key = match app.hover_preview.clone() {
         Some(h) if !interacting => app.session.preview_job(id, sw.max(8), sh.max(8), !crop_tool, &h.settings).map(|job| {
             // (the same display fit as the After view, drawn texel for texel like it)
-            let job = job.with_display_fit((target_rect.width() * ppp).round() as usize, (target_rect.height() * ppp).round() as usize);
+            let job = job.with_display_fit(fit_px[0], fit_px[1]);
             let key = job.key;
             app.renderer.request(Slot::Hover, job, 105);
             (key, h.label)
@@ -666,11 +672,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         && let Some(job) = app.session.render_job(id, sw.max(8), sh.max(8), true, !crop_tool)
     {
         // (the same display fit as the After view, so both panes are the same texture size)
-        let job = if interacting {
-            job
-        } else {
-            job.with_display_fit((target_rect.width() * ppp).round() as usize, (target_rect.height() * ppp).round() as usize)
-        };
+        let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         app.renderer.request(Slot::Before, job, 90);
     }
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more
@@ -749,6 +751,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         p.text(pos2(canvas.right() - 16.0, canvas.top() + 14.0), Align2::RIGHT_CENTER, label, t.font(12.5), Color32::from_gray(60));
     }
     let shown;
+    // the Before label's pill, painted once the window renders are down (they would cover it)
+    let mut before_badge: Option<(Rect, std::sync::Arc<egui::Galley>)> = None;
+    // below what else lives in the canvas' top-left corner: the filter pill, the info overlay
+    let pill_inset = if !fullscreen && filter_pill_shown(app) { FILTER_PILL_INSET + FILTER_PILL_HEIGHT } else { 0.0 };
+    let badge_top_inset = pill_inset.max(info_overlay_extent(app, &p, &photo));
     if split {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the
         // other view's margins with its whole-frame render, magnified and blurred)
@@ -761,18 +768,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         p.text(label_at(img_rect, main_area), Align2::LEFT_CENTER, crate::i18n::tr("After"), t.font(12.0), t.text_dim);
     } else if show_before {
         shown = draw(Slot::Before, img_rect, canvas);
-        // on the photo itself, so it gets the hover label's dark pill to stay readable over light pictures
+        // on the photo itself, so it gets the hover label's dark pill to stay readable over light
+        // pictures; painted after the window renders below, which would cover it zoomed in
         let g = p.layout_no_wrap(crate::i18n::tr("Before").to_string(), t.font(12.0), Color32::WHITE);
-        let bg = label_badge_rect(img_rect, g.size());
-        p.rect_filled(bg, 4.0, Color32::from_black_alpha(160));
-        p.galley(bg.min + vec2(8.0, 4.0), g, Color32::WHITE);
+        before_badge = Some((label_badge_rect(img_rect, canvas, g.size(), badge_top_inset), g));
     } else if let Some((_key, label)) = &hover_key
         && let Some(tex) = app.renderer.textures.get(&Slot::Hover).filter(|t| t.photo == id)
     {
         let hover_rect = fit_texture_rect(img_rect, tex.size);
         p.image(tex.tex.id(), hover_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let g = p.layout_no_wrap(label.clone(), t.font(12.0), Color32::WHITE);
-        let bg = label_badge_rect(hover_rect, g.size());
+        let bg = label_badge_rect(hover_rect, canvas, g.size(), badge_top_inset);
         p.rect_filled(bg, 4.0, Color32::from_black_alpha(160));
         p.galley(bg.min + vec2(8.0, 4.0), g, Color32::WHITE);
         shown = "hover";
@@ -822,6 +828,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
         let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
         draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view);
+    }
+    if let Some((bg, g)) = before_badge {
+        p.rect_filled(bg, 4.0, Color32::from_black_alpha(160));
+        p.galley(bg.min + vec2(8.0, 4.0), g, Color32::WHITE);
+        register(ui.ctx(), "canvas:beforeLabel", bg);
     }
     // the line of a wipe over both
     if app.ui.before_after == BeforeAfter::Split {
@@ -947,7 +958,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
         preview_only_pill(ui, canvas, why);
     }
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
                 if ui.button(crate::i18n::tr(label)).clicked() {
@@ -961,59 +972,68 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// The dark pill behind a label drawn over the photo (`Before`, a hovered preset's name): at the
-/// photo's top left, inset 8 points, with the `text` size plus padding.
-fn label_badge_rect(photo: Rect, text: egui::Vec2) -> Rect {
-    Rect::from_min_size(photo.left_top() + vec2(8.0, 8.0), text + vec2(16.0, 8.0))
+/// photo's top left, inset 8 points, with the `text` size plus padding. Zoomed in, the photo
+/// reaches past its `pane` (the canvas): the pill then sits at the pane's top left, so the label
+/// stays in view (issue #2267: at 100 % it left the screen with the photo's corner), below the
+/// `top_inset` the filter pill takes in that corner, and never past the pane's right edge.
+fn label_badge_rect(photo: Rect, pane: Rect, text: egui::Vec2, top_inset: f32) -> Rect {
+    let size = text + vec2(16.0, 8.0);
+    let left = photo.left().max(pane.left()).min(pane.right() - size.x - 16.0).max(pane.left());
+    let corner = pos2(left, photo.top().max(pane.top() + top_inset));
+    Rect::from_min_size(corner + vec2(8.0, 8.0), size)
 }
 
-/// The info overlay at the canvas' top left (`view.infoOverlay`): file name with the capture date
-/// and size, or with the camera and exposure.
+/// The info overlay at the canvas' top left (`view.infoOverlay`): the lines View Options chose for
+/// Info 1 or Info 2 (`view.viewOptions`).
 fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
-    use crate::state::InfoOverlay;
-    let lines: Vec<String> = match app.ui.info_overlay {
-        InfoOverlay::Off => return,
-        InfoOverlay::Basic => {
-            let date = photo.captured.as_deref().unwrap_or(&photo.imported);
-            vec![photo.file_name.clone(), format!("{} · {} × {}", pretty_date(date), photo.width, photo.height)]
-        }
-        InfoOverlay::Exposure => {
-            let m = &photo.meta;
-            let mut exp = Vec::new();
-            if !m.shutter.is_empty() {
-                exp.push(format!("{} s", m.shutter));
-            }
-            if let Some(a) = m.aperture {
-                exp.push(format!("f/{a:.1}"));
-            }
-            if let Some(i) = m.iso {
-                exp.push(format!("ISO {i}"));
-            }
-            if let Some(f) = m.focal_mm {
-                exp.push(format!("{f:.0} mm"));
-            }
-            let camera = [m.camera.as_str(), m.lens.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
-            let mut v = vec![photo.file_name.clone()];
-            v.push(if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") });
-            if !camera.is_empty() {
-                v.push(camera);
-            }
-            v
-        }
-    };
+    let Some(lines) = info_overlay_lines(app, photo) else { return };
     let t = Tokens::get(p.ctx());
-    let mut y = canvas.top() + 12.0;
+    let mut y = canvas.top() + INFO_OVERLAY_TOP;
     for (i, l) in lines.iter().enumerate() {
-        let font = if i == 0 { t.semibold(15.0) } else { t.font(12.5) };
         // laid out uncoloured: `galley` only fills placeholder text with its colour, so a white
         // layout made the shadow a second white copy (#1690)
-        let g = p.layout_no_wrap(l.clone(), font, Color32::PLACEHOLDER);
+        let g = p.layout_no_wrap(l.clone(), info_overlay_font(&t, i), Color32::PLACEHOLDER);
         let at = pos2(canvas.left() + 14.0, y);
         // a soft shadow keeps the text readable on bright photos
         p.galley(at + vec2(1.0, 1.0), g.clone(), Color32::from_black_alpha(200));
         p.galley(at, g.clone(), Color32::WHITE);
-        y += g.size().y + 3.0;
+        y += g.size().y + INFO_OVERLAY_GAP;
     }
     register(p.ctx(), "canvas:infoOverlay", Rect::from_min_max(canvas.min, pos2(canvas.left() + 320.0, y)));
+}
+
+/// Where the info overlay's text starts below the canvas' top, and the gap after each line.
+const INFO_OVERLAY_TOP: f32 = 12.0;
+const INFO_OVERLAY_GAP: f32 = 3.0;
+
+/// The info overlay's font for line `i` (the file name is the first, larger line).
+fn info_overlay_font(t: &Tokens, i: usize) -> egui::FontId {
+    if i == 0 { t.semibold(15.0) } else { t.font(12.5) }
+}
+
+/// How far below the canvas' top the info overlay's text reaches (0 when it is off), so a label
+/// drawn in that corner can sit below it.
+fn info_overlay_extent(app: &LightcraftApp, p: &egui::Painter, photo: &lightcraft_catalog::Photo) -> f32 {
+    let Some(lines) = info_overlay_lines(app, photo) else { return 0.0 };
+    let t = Tokens::get(p.ctx());
+    lines.iter().enumerate().fold(INFO_OVERLAY_TOP, |y, (i, l)| {
+        y + p.layout_no_wrap(l.clone(), info_overlay_font(&t, i), Color32::PLACEHOLDER).size().y + INFO_OVERLAY_GAP
+    })
+}
+
+/// The info overlay's lines for `photo`, or `None` when it is off.
+fn info_overlay_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Option<Vec<String>> {
+    use crate::state::InfoOverlay;
+    let fields = match app.ui.info_overlay {
+        InfoOverlay::Off => return None,
+        InfoOverlay::Basic => &app.ui.settings.loupe_info.info1,
+        InfoOverlay::Exposure => &app.ui.settings.loupe_info.info2,
+    };
+    let lines: Vec<String> = fields.iter().filter_map(|f| info_line(*f, photo)).collect();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(lines)
 }
 
 /// What the user did to a face box this frame.
@@ -1189,6 +1209,16 @@ fn region_overlay(
     edit
 }
 
+/// The filter pill's inset from the canvas' top-left corner and its height (the same inset from
+/// the left as from the top, so the pill sits in the corner, #1645).
+const FILTER_PILL_INSET: f32 = 3.0;
+const FILTER_PILL_HEIGHT: f32 = 20.0;
+
+/// Whether [`filter_pill`] has something to show (a filter is active).
+fn filter_pill_shown(app: &LightcraftApp) -> bool {
+    !lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).is_empty()
+}
+
 /// A small pill at the loupe's top left naming the active filters: the filmstrip and Next / Previous
 /// follow them, so a filter must never be invisible here. A click clears them all. It sits in the
 /// canvas margin, so the photo does not move.
@@ -1202,10 +1232,9 @@ fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     let label =
         chips.iter().map(|c| crate::panels::chips::display_label(c, &app.session.filter, &app.session.catalog)).collect::<Vec<_>>().join("  ·  ");
     let g = p.layout_no_wrap(crate::i18n::tr_format!("Filtered: {label}", label = label), t.font(12.0), Color32::from_gray(225));
-    // the same inset from the left as from the top, so the pill sits in the corner (#1645)
-    let inset = 3.0;
+    let inset = FILTER_PILL_INSET;
     let w = (g.size().x + 40.0).min((canvas.width() - 2.0 * inset).max(60.0));
-    let r = Rect::from_min_size(canvas.min + vec2(inset, inset), vec2(w, 20.0));
+    let r = Rect::from_min_size(canvas.min + vec2(inset, inset), vec2(w, FILTER_PILL_HEIGHT));
     let resp = ui.interact(r, egui::Id::new("loupe-filter-pill"), Sense::click());
     crate::widgets::announce(&resp, crate::i18n::tr("Filters"));
     register(ui.ctx(), "loupe:filters", r);
@@ -1235,6 +1264,39 @@ fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
     p.galley(pos2(r.left() + 29.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
     register(ui.ctx(), "notice:previewOnly:loupe", r);
     ui.interact(r, egui::Id::new("preview-only-pill"), Sense::hover()).on_hover_text(crate::widgets::preview_only_explanation(reason));
+}
+
+/// One line of the info overlay for `photo`; `None` when the field is None or the photo has
+/// nothing to show for it.
+fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_catalog::Photo) -> Option<String> {
+    use crate::state::LoupeInfoField as F;
+    let m = &photo.meta;
+    let text = match field {
+        F::None => return None,
+        F::FileName => photo.file_name.clone(),
+        F::CaptureDate => pretty_date(photo.captured.as_deref().unwrap_or(&photo.imported)),
+        F::Dimensions => format!("{} × {}", photo.width, photo.height),
+        F::Exposure => {
+            let mut exp = Vec::new();
+            if !m.shutter.is_empty() {
+                exp.push(format!("{} s", m.shutter));
+            }
+            if let Some(a) = m.aperture {
+                exp.push(format!("f/{a:.1}"));
+            }
+            if let Some(i) = m.iso {
+                exp.push(format!("ISO {i}"));
+            }
+            if let Some(f) = m.focal_mm {
+                exp.push(format!("{f:.0} mm"));
+            }
+            if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") }
+        }
+        F::Camera => m.camera.clone(),
+        F::Lens => m.lens.clone(),
+        F::CameraAndLens => [m.camera.as_str(), m.lens.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · "),
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 /// `2026-09-30T12:00:00` → `2026-09-30 12:00`.
@@ -1535,8 +1597,13 @@ fn general_interaction(
 // ------------------------------------------------------------------------ crop
 
 fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings, id: PhotoId) {
+    // the selected guide belongs to this photo and to the Guided Upright tool, and to a guide
+    // that still exists (a Delete after the last one leaves the selection behind)
+    if app.ui.tool != "guidedUpright" || app.ui.selected_guide.is_some_and(|(photo, i)| photo != id.0 || i >= d.geometry.guides.len()) {
+        app.ui.selected_guide = None;
+    }
     if app.ui.tool == "guidedUpright" {
-        guided_overlay(app, ui, resp, map, frame, d);
+        guided_overlay(app, ui, resp, map, frame, d, id);
         return;
     }
     if app.ui.tool == "straighten" {
@@ -1691,7 +1758,6 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         // the canvas (the loupe's own rect), not the photo: rotating happens in the margin around it
         angle_readout(ui, at, shown_angle, resp.rect);
     }
-    let _ = id;
 }
 
 /// The crop handles' names for screen readers, in `crop.drag`'s numbering: 0..3 corners, 4..7
@@ -1830,39 +1896,142 @@ fn angle_readout(ui: &egui::Ui, at: Pos2, angle: f64, bounds: Rect) {
 
 /// Guided Upright: draw up to four guides along lines that should be vertical or horizontal. Guides are
 /// stored in lens-corrected (pre-perspective) coordinates, so they stay attached to the image as it warps.
-fn guided_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings) {
+fn guided_overlay(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    map: &CanvasMap,
+    frame: &Frame,
+    d: &DevelopSettings,
+    id: PhotoId,
+) {
     let p = ui.painter_at(map.rect.expand(8.0));
     let col = Color32::from_rgb(255, 196, 40);
-    let draw = |a: Pos2, b: Pos2| {
-        p.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(120)));
-        p.line_segment([a, b], Stroke::new(1.5, col));
+    // the selected guide: brighter, so the Delete key has a visible target
+    let selected = app.ui.selected_guide.filter(|(photo, _)| *photo == id.0).map(|(_, i)| i);
+    let draw = |a: Pos2, b: Pos2, sel: bool| {
+        let (edge, core, at) = if sel { (3.5, 2.5, 5.0) } else { (3.0, 1.5, 4.0) };
+        p.line_segment([a, b], Stroke::new(edge, Color32::from_black_alpha(120)));
+        p.line_segment([a, b], Stroke::new(core, if sel { Color32::WHITE } else { col }));
         for q in [a, b] {
-            p.circle_filled(q, 4.0, col);
-            p.circle_stroke(q, 4.0, Stroke::new(1.0, Color32::BLACK));
+            p.circle_filled(q, at, if sel { Color32::WHITE } else { col });
+            p.circle_stroke(q, at, Stroke::new(1.0, Color32::BLACK));
         }
     };
-    for (i, (a, b)) in d.geometry.guides.iter().enumerate() {
-        let (sa, sb) = (map.screen(frame.corrected_to_transformed(*a)), map.screen(frame.corrected_to_transformed(*b)));
+    let on_screen = |guide: &(Point, Point)| {
+        let (sa, sb) = (map.screen(frame.corrected_to_transformed(guide.0)), map.screen(frame.corrected_to_transformed(guide.1)));
+        (sa, sb)
+    };
+    for (i, guide) in d.geometry.guides.iter().enumerate() {
+        let (sa, sb) = on_screen(guide);
         register(ui.ctx(), format!("uprightGuide:{i}"), Rect::from_two_pos(sa, sb));
-        draw(sa, sb);
+        draw(sa, sb, selected == Some(i));
     }
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-    if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+    // A press starts what it means, right away (the pointer's press point, not where a drag
+    // threshold would have been crossed): on an endpoint it drags that endpoint (the guide is
+    // selected when it lands), on a line it selects the guide (a press on the selected one
+    // deselects), anywhere else it starts a new guide from the press point. The primary button
+    // only, never on the navigator — it pans the photo, it draws no guide — and only where the
+    // loupe itself takes the press: `contains_pointer` is layer-aware over the current pointer
+    // (the raw pointer is not), and `layer_id_at` asks the same question at the press point —
+    // a menu can receive the press and the pointer can leave it within the same frame, so the
+    // press itself must belong to the loupe's layer. Anything floating above the photo — a
+    // context menu, a dropdown, a dialog — owns its own press; the guide under it stays put.
+    // A slow frame can also swallow the whole press-move-release into one batch, and egui
+    // clears `press_origin` on the release: then the press position is read back from the
+    // frame's own events, so the gesture still starts where the pointer went down.
+    let nav = app.widgets.iter().rev().find(|(w, _)| w == "canvas:navigator").map(|(_, r)| *r);
+    if ui.input(|i| i.pointer.primary_pressed())
+        && let Some(q) = ui
+            .input(|i| {
+                i.pointer.press_origin().or_else(|| {
+                    i.events.iter().rev().find_map(|e| match e {
+                        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                        _ => None,
+                    })
+                })
+            })
+            .or(resp.interact_pointer_pos())
+        && resp.contains_pointer()
+        && ui.ctx().layer_id_at(q) == Some(resp.layer_id)
+        && resp.rect.contains(q)
+        && !nav.is_some_and(|n| n.expand(5.0).contains(q))
     {
-        app.gesture = Some(Gesture::Guide { a: map.norm(q) });
+        let endpoint = d.geometry.guides.iter().enumerate().find_map(|(i, guide)| {
+            let (a, b) = on_screen(guide);
+            if a.distance(q) <= 7.0 {
+                Some((i, 0))
+            } else if b.distance(q) <= 7.0 {
+                Some((i, 1))
+            } else {
+                None
+            }
+        });
+        let line = d.geometry.guides.iter().position(|guide| {
+            let (a, b) = on_screen(guide);
+            point_segment_dist(q, a, b) <= 6.0
+        });
+        match (endpoint, line) {
+            (Some((i, end)), _) => app.gesture = Some(Gesture::GuideEndpoint { i, end, from: q }),
+            (None, Some(i)) => app.ui.selected_guide = if selected == Some(i) { None } else { Some((id.0, i)) },
+            // drawing a new guide leaves nothing selected
+            (None, None) => {
+                app.ui.selected_guide = None;
+                app.gesture = Some(Gesture::Guide { a: map.norm(q) });
+            }
+        }
     }
-    if let (Some(Gesture::Guide { a }), Some(q)) = (&app.gesture, resp.interact_pointer_pos()) {
-        draw(map.screen(*a), q);
+    let q = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()));
+    if let (Some(Gesture::Guide { a }), Some(q)) = (&app.gesture, q) {
+        draw(map.screen(*a), q, false);
     }
-    if resp.drag_stopped()
-        && let (Some(Gesture::Guide { a }), Some(q)) = (app.gesture.clone(), resp.interact_pointer_pos())
+    // the endpoint being dragged: the guide follows the pointer, bright
+    if let (Some(Gesture::GuideEndpoint { i, end, .. }), Some(q)) = (&app.gesture, q)
+        && let Some(guide) = d.geometry.guides.get(*i)
     {
-        app.gesture = None;
-        let b = map.norm(q);
-        if a.dist(b) > 0.02 {
-            let (ca, cb) = (frame.transformed_to_corrected(a), frame.transformed_to_corrected(b));
-            let _ = app.run("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
+        let fixed = if *end == 0 { guide.1 } else { guide.0 };
+        draw(map.screen(frame.corrected_to_transformed(fixed)), q, true);
+    }
+    if ui.input(|i| i.pointer.any_released()) {
+        match app.gesture.take() {
+            // the endpoint lands: the guide stays (one undo step) and is selected. A press
+            // without a real drag only selects — no no-op undo entry for a click.
+            Some(Gesture::GuideEndpoint { i, end, from }) => {
+                app.ui.selected_guide = Some((id.0, i));
+                if let (Some(q), Some(guide)) = (q, d.geometry.guides.get(i)) {
+                    let fixed_t = if end == 0 { guide.1 } else { guide.0 };
+                    let new_t = frame.transformed_to_corrected(map.norm(q));
+                    let (a, b) = if end == 0 { (new_t, fixed_t) } else { (fixed_t, new_t) };
+                    let (na, nb) = (frame.corrected_to_transformed(a), frame.corrected_to_transformed(b));
+                    // a press that only selected (it landed within the endpoint's grab radius
+                    // and never moved) writes no guide: compare against where it went down
+                    let moved = from.distance(q) > 2.0;
+                    if moved && na.dist(nb) > 0.02 {
+                        let all: Vec<[f64; 4]> = d
+                            .geometry
+                            .guides
+                            .iter()
+                            .enumerate()
+                            .map(|(j, g)| {
+                                let (x, y) = if j == i { (a, b) } else { *g };
+                                [x.x, x.y, y.x, y.y]
+                            })
+                            .collect();
+                        let _ = app.run("geometry.guides", json!({"guides": all}));
+                    }
+                }
+            }
+            Some(Gesture::Guide { a }) => {
+                if let Some(q) = q
+                    && map.norm(q).dist(a) > 0.02
+                {
+                    let b = map.norm(q);
+                    let (ca, cb) = (frame.transformed_to_corrected(a), frame.transformed_to_corrected(b));
+                    let _ = app.run("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
+                }
+            }
+            other => app.gesture = other,
         }
     }
 }
@@ -1873,6 +2042,13 @@ fn to_straight(n: Point, angle: f64, frame: &Frame) -> Point {
     let px = Point::new(n.x * w, n.y * h);
     let r = Affine::rotate_about(angle.to_radians(), Point::new(w / 2.0, h / 2.0)).apply(px);
     Point::new(r.x / w, r.y / h)
+}
+
+/// How far `q` is from the segment `a`–`b` (screen pixels): the click that selects a guide.
+fn point_segment_dist(q: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let t = if ab.length_sq() > 0.0 { ((q - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0) } else { 0.0 };
+    (a + ab * t).distance(q)
 }
 
 /// A crop box's corners (top-left, top-right, bottom-right, bottom-left of the unflipped photo)
@@ -2699,13 +2875,27 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     film_badges(p, &t, fr, ph);
                 }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
+                    let collapsed = st.collapsed;
                     let text =
-                        if st.collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
+                        if collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
                     let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
                     let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
-                    p.rect_filled(br, 7.5, Color32::from_black_alpha(170));
+                    // like the grid's badge: a click expands / collapses the stack
+                    let badge = ui.interact(br, egui::Id::new(("film-stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
+                        "Stack — click to expand"
+                    } else {
+                        "Stack — click to collapse"
+                    });
+                    crate::widgets::announce(&badge, crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" }));
+                    register(ui.ctx(), format!("filmstack:{}", id.0), br);
+                    let p = ui.painter();
+                    let fill = if badge.hovered() { Color32::from_black_alpha(230) } else { Color32::from_black_alpha(170) };
+                    p.rect_filled(br, 7.5, fill);
                     crate::icons::paint(p, Rect::from_min_size(br.min + vec2(4.0, 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Stack, Color32::WHITE);
                     p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+                    if badge.clicked() {
+                        super::grid::toggle_stack(app, ui.ctx(), *id);
+                    }
                 }
             }
             if resp.clicked() {
@@ -2732,7 +2922,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 }
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
-            resp.context_menu(|ui| super::grid::context_menu(app, ui, *id));
+            crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
         }
     });
 }
@@ -2773,11 +2963,45 @@ mod preview_geometry_tests {
     #[test]
     fn before_label_badge_wraps_the_text() {
         let text = vec2(40.0, 14.0);
+        let pane = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let photo = Rect::from_min_size(pos2(20.0, 30.0), vec2(400.0, 300.0));
-        let bg = label_badge_rect(photo, text);
+        let bg = label_badge_rect(photo, pane, text, 0.0);
         assert_eq!(bg.min, pos2(28.0, 38.0));
         assert_eq!(bg.size(), vec2(56.0, 22.0));
         assert!(photo.contains_rect(bg));
+    }
+
+    /// Zoomed in, the photo's corner is off the canvas: the pill moves to the canvas' corner
+    /// instead of leaving with it (issue #2267), on whichever axes the photo reaches past.
+    #[test]
+    fn before_label_badge_stays_in_the_pane_when_the_photo_reaches_past_it() {
+        let text = vec2(40.0, 14.0);
+        let pane = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
+        let both = label_badge_rect(Rect::from_min_size(pos2(-900.0, -700.0), vec2(3000.0, 2000.0)), pane, text, 0.0);
+        assert_eq!(both.min, pos2(108.0, 58.0));
+        assert!(pane.contains_rect(both));
+        let left_only = label_badge_rect(Rect::from_min_size(pos2(-900.0, 120.0), vec2(3000.0, 400.0)), pane, text, 0.0);
+        assert_eq!(left_only.min, pos2(108.0, 128.0));
+        assert!(pane.contains_rect(left_only));
+    }
+
+    /// With a filter active, the pill in the canvas' corner has that corner: the label sits below
+    /// it, whether the photo is past the pane or just under the pill. A photo lower down is left
+    /// alone. A wide label near the pane's right edge stays inside the pane.
+    #[test]
+    fn before_label_badge_keeps_clear_of_the_filter_pill_and_the_right_edge() {
+        let text = vec2(40.0, 14.0);
+        let pane = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
+        let inset = super::FILTER_PILL_INSET + super::FILTER_PILL_HEIGHT;
+        let past = label_badge_rect(Rect::from_min_size(pos2(-900.0, -700.0), vec2(3000.0, 2000.0)), pane, text, inset);
+        assert_eq!(past.min, pos2(108.0, 50.0 + inset + 8.0));
+        let under = label_badge_rect(Rect::from_min_size(pos2(200.0, 60.0), vec2(400.0, 300.0)), pane, text, inset);
+        assert_eq!(under.min.y, 50.0 + inset + 8.0, "a photo whose corner is under the pill moves down too");
+        let lower = label_badge_rect(Rect::from_min_size(pos2(200.0, 200.0), vec2(400.0, 300.0)), pane, text, inset);
+        assert_eq!(lower.min, pos2(208.0, 208.0));
+        let wide = label_badge_rect(Rect::from_min_size(pos2(860.0, 200.0), vec2(400.0, 300.0)), pane, text, 0.0);
+        assert!(pane.contains_rect(wide), "{wide:?}");
+        assert_eq!(wide.max.x, pane.right() - 8.0, "8 points from the pane's right edge, like the left inset");
     }
 
     #[test]
@@ -3198,5 +3422,44 @@ mod info_overlay_tests {
         assert_eq!(copies.len(), 2, "the file name and its shadow: {copies:?}");
         assert_eq!(copies[1], Color32::WHITE, "the text on top");
         assert!(copies[0].r() < 64 && copies[0].a() > 0, "the shadow under it is dark: {:?}", copies[0]);
+    }
+
+    /// The lines the overlay paints, top to bottom (each once: the shadow copies left out).
+    fn painted_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Vec<String> {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let canvas = Rect::from_min_size(pos2(52.0, 82.0), vec2(800.0, 500.0));
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        let mut out = ctx.run_ui(raw, |ui| info_overlay(app, ui.painter(), canvas, photo));
+        out.textures_delta.clear();
+        let mut lines = Vec::new();
+        for c in &out.shapes {
+            if let egui::epaint::Shape::Text(t) = &c.shape
+                && t.override_text_color.unwrap_or(t.fallback_color) == Color32::WHITE
+            {
+                lines.push(t.galley.job.text.clone());
+            }
+        }
+        lines
+    }
+
+    /// View ▸ View Options: Info 1 and Info 2 each show the three lines chosen for them, in that
+    /// order, without the lines set to None.
+    #[test]
+    fn the_info_overlay_shows_the_lines_chosen_in_view_options() {
+        use crate::state::{InfoOverlay, LoupeInfoField as F};
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let photo = app.session.catalog.photos().next().map(|p| (**p).clone()).expect("the demo catalog has photos");
+        let size = format!("{} × {}", photo.width, photo.height);
+        let date = pretty_date(photo.captured.as_deref().unwrap_or(&photo.imported));
+        app.ui.settings.loupe_info.info1 = [F::Dimensions, F::None, F::FileName];
+        app.ui.settings.loupe_info.info2 = [F::CaptureDate, F::FileName, F::None];
+        app.ui.info_overlay = InfoOverlay::Basic;
+        assert_eq!(painted_lines(&app, &photo), vec![size.clone(), photo.file_name.clone()], "Info 1");
+        app.ui.info_overlay = InfoOverlay::Exposure;
+        assert_eq!(painted_lines(&app, &photo), vec![date, photo.file_name.clone()], "Info 2");
+        app.ui.settings.loupe_info.info1 = [F::None; 3];
+        app.ui.info_overlay = InfoOverlay::Basic;
+        assert_eq!(painted_lines(&app, &photo), Vec::<String>::new(), "nothing chosen, nothing shown");
     }
 }
