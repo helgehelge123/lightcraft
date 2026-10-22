@@ -2185,5 +2185,13 @@
   "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根据你已命名的人脸，推测照片中的人物。所有数据仅保存在本机。",
   "This build cannot run recognition models: they can be added and chosen, not used.": "此版本无法运行识别模型：可以添加和选择，但无法使用。",
   "Detect Faces (Photo menu) needs it: a small one-time download.": "“检测人脸”（照片菜单）依赖它：一次性小文件下载。",
-  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）"
+  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）",
+  "AI masks": "AI 蒙版",
+  "Device": "设备",
+  "Last photo": "上一张照片",
+  "Remote worker": "远程工作进程",
+  "Run on": "运行位置",
+  "Automatic (GPU when available)": "自动（有 GPU 时使用）",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "“对象”和“描述”蒙版对每张照片只分析一次；除非选择了 CPU 或关闭了“使用 GPU 渲染”，否则在显卡上进行。在处理器上分析要慢得多。",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "“自动”会在 Mac 的显卡上运行模型。如果 AI 蒙版在那里失败，请选择 CPU；在处理器上会慢得多。"
 }

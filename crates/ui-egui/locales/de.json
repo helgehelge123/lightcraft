@@ -3450,5 +3450,13 @@
   "favourites across restarts (issue #328).": "über Neustarts hinweg Favoriten (Issue #328).",
   "Optional remote SAM 3: keep the native editor local and run Object, Describe, and detail": "Optionales entferntes SAM 3: Der native Editor bleibt lokal, und Objekt-, Beschreibungs- und Detail-",
   "inference on a Mac through SSH. Saved masks still render and export offline.": "Inferenz laufen über SSH auf einem Mac. Gespeicherte Masken werden weiterhin offline gerendert und exportiert.",
-  "See [remote Metal inference](ai-masks.md#remote-metal-inference).": "Siehe [remote Metal inference](ai-masks.md#remote-metal-inference)."
+  "See [remote Metal inference](ai-masks.md#remote-metal-inference).": "Siehe [remote Metal inference](ai-masks.md#remote-metal-inference).",
+  "AI masks": "KI-Masken",
+  "Device": "Gerät",
+  "Last photo": "Letztes Foto",
+  "Remote worker": "Entfernter Worker",
+  "Run on": "Ausführen auf",
+  "Automatic (GPU when available)": "Automatisch (GPU, wenn vorhanden)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Objekt- und Beschreiben-Masken analysieren jedes Foto einmal, auf der Grafikkarte, außer CPU ist gewählt oder „GPU zum Rendern verwenden“ ist aus. Auf dem Prozessor dauert das deutlich länger.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatisch führt das Modell auf der Grafikkarte des Mac aus. Wählen Sie CPU, wenn KI-Masken dort scheitern; auf dem Prozessor dauern sie deutlich länger."
 }
