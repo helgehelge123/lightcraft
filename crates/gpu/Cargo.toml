@@ -48,6 +48,10 @@ name = "sam3_backbone"
 required-features = ["sam"]
 
 [[test]]
+name = "sam3_detr"
+required-features = ["sam"]
+
+[[test]]
 name = "sam3_necks"
 required-features = ["sam"]
 
