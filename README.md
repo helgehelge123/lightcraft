@@ -14,7 +14,8 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
-  <a href="README.zh-hans.md">简体中文</a>
+  <a href="README.zh-hans.md">简体中文</a> ·
+  <a href="README.zh-hant.md">繁體中文</a>
 </p>
 
 <p align="center">
@@ -28,6 +29,9 @@
   <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
   <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=storytold_lightcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/lightcraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -209,7 +213,8 @@ Then tone it with Color Grading for selenium, sepia or split-tone prints.
 A library that stays out of your way: **All Photos**, **Recently Added**, **Picks**, **By Date**, **Albums** nested in
 **Folders**, and **Recently Deleted**. Rate with <kbd>0</kbd>–<kbd>5</kbd>, flag with <kbd>P</kbd> / <kbd>X</kbd> /
 <kbd>U</kbd>, colour-label with <kbd>6</kbd>–<kbd>9</kbd>. Search understands fields:
-`rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains`. Every view sorts by capture date,
+`rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains person:"Jane Doe"`; plain words also match
+the people named on faces, and quotes keep several words together. Every view sorts by capture date,
 import date, edit date, name, rating, size or at random (a stable shuffle; View → Sort → Reshuffle for a new one). The justified **Photo Grid** and **Square Grid** views are virtualized,
 so they stay smooth whether you have forty photos or forty thousand.
 
@@ -448,7 +453,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo — the standard for what goes there lives with it: see the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
-**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული) or **Settings → General →
+**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
