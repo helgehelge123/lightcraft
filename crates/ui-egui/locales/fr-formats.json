@@ -297,5 +297,6 @@
   "Move {n} photo{} to “{}”": "Déplacer {n} photo{} vers « {} »",
   "Move {n} photo{} to “{}”?": "Déplacer {n} photo{} vers « {} » ?",
   "Listing folders — folders: {folders}, files: {files}": "Liste des dossiers — dossiers : {folders}, fichiers : {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place.",
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} s, encodeur d’image {encoder:.1} s"
 }

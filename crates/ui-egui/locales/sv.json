@@ -2414,5 +2414,13 @@
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-dra för att räta upp, ⇧G guidad upprätning, ett rutnät under transformering.",
   "★ Favorites": "★ Favoriter",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "AI masks": "AI-masker",
+  "Device": "Enhet",
+  "Last photo": "Senaste foto",
+  "Remote worker": "Fjärrarbetare",
+  "Run on": "Kör på",
+  "Automatic (GPU when available)": "Automatisk (GPU när den finns)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Objekt- och Beskriv-masker analyserar varje foto en gång, på grafikkortet om inte CPU är vald eller ”Använd GPU:n för rendering” är av. På processorn tar det mycket längre tid.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatisk kör modellen på Macens grafikkort. Välj CPU om AI-masker misslyckas där; på processorn tar de mycket längre tid."
 }
