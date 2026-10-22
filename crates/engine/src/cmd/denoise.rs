@@ -679,7 +679,7 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
 /// How far photos `ids` are (`denoise.batch`'s): made, failed (or dropped from the queue), still waiting, and the one being made.
 fn batch_status(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::denoise::PhotoState;
-    let ids = ids_param(p).ok_or_else(|| bad("denoise.batchStatus", "`ids` must be photo ids"))?;
+    let ids = super::photo_ids(p, "denoise.batchStatus")?.ok_or_else(|| bad("denoise.batchStatus", "`ids` must be photo ids"))?;
     let (mut ready, mut failed, mut waiting, mut running) = (0usize, 0usize, 0usize, Value::Null);
     for id in &ids {
         match s.denoise_photo_state(*id) {

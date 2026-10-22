@@ -685,11 +685,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, failed: Option<&st
             Ok(logits.map(|l| SegMask::from_logits(side, &l)))
         }
         Kind::People { face, parts } => {
-            let (m, enc) = encoded(state, shared, job, placement)?;
+            let (m, enc) = encoded(state, shared, job, failed)?;
             Ok(people_logits(m, enc, face, &parts)?.map(|l| SegMask::from_logits(side, &l)))
         }
         Kind::Subjects { labels, reply } => {
-            let found = encoded(state, shared, job).and_then(|(m, enc)| super::subjects::find(m, enc, &labels));
+            let found = encoded(state, shared, job, failed).map_err(Failure::message).and_then(|(m, enc)| super::subjects::find(m, enc, &labels));
             let _ = reply.send(found);
             Ok(None)
         }

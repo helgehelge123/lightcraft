@@ -131,6 +131,7 @@ fn people_shape(s: &Session, p: &Value, c: &str) -> Result<MaskShape> {
         (None, None) => return Err(bad(c, "a People mask needs `person` (the index of one of photo.faces) or `face` [x0, y0, x1, y1]")),
     };
     Ok(MaskShape::People { person, parts, face: Some(face), seg, detail: vec![], edge: 0.0 })
+}
 
 /// New Sky selections use the same stored model result as Describe. Old `MaskShape::Sky`
 /// values retain their existing source-matte/heuristic rendering when reopened.
