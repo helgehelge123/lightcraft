@@ -265,6 +265,12 @@ fn a_masks_curve_editor_edits_that_masks_curve_only() {
     assert!((c[1].0 - 0.5).abs() < 0.03 && (c[1].1 - 0.7).abs() < 0.03, "{c:?}");
     assert_eq!(h.app.session.undo.len(), undo_before + 1, "one undo step per drag");
     assert_eq!(develop(&h).curve, lightcraft_develop::ToneCurve::default(), "the Tone Curve stays linear");
+    assert!(!h.app.ui.mask_overlay, "a mask curve edit hides the overlay, as a mask slider does");
+    // `mask: null` edits the photo's Tone Curve: the overlay stays as it is
+    h.app.ui.mask_overlay = true;
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.05], [1.0, 1.0]], "mask": null}));
+    assert!(h.app.ui.mask_overlay, "a Tone Curve edit leaves the overlay alone");
+    assert_eq!(develop(&h).curve.master.len(), 2, "mask: null is the Tone Curve");
     // another channel, then double-click resets only it
     click_widget(&mut h, "maskCurveChannel:red", 1);
     assert_eq!(h.app.ui.mask_curve_channel, "red");
