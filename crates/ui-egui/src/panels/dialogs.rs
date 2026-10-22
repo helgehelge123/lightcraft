@@ -345,7 +345,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
                     );
                 }
-                Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity } => {
+                Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity, reset_bursts } => {
                     let n = app.session.selection.ids.len();
                     let scope = if n > 1 { crate::i18n::tr_format!("the {n} selected photos", n = n) } else { crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len()) };
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).", scope = scope)).color(t.text_label));
@@ -383,6 +383,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     crate::widgets::register(ui.ctx(), "field:cullSimilar", r.rect);
                     clamp_cull_burst(burst_gap, similarity);
                     ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
+                    let r = ui.checkbox(reset_bursts, crate::i18n::tr("Regroup bursts I arranged by hand"));
+                    crate::widgets::register(ui.ctx(), "check:cullResetBursts", r.rect);
+                    ui.label(egui::RichText::new(crate::i18n::tr("Put bursts right by dragging in Window → Bursts: the first photo of a burst is its pick, and culling again keeps what you arranged.")).color(t.text_dim));
                     ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.")).color(t.text_dim));
                 }
                 Dialog::WhatsNew => {
@@ -1964,11 +1967,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity } => {
+        Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity, reset_bursts } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));
             app.ui.cull_stack = *stack_groups;
             let mut p = cull_params(*reject_below, *pick_best, *burst_gap, *similarity);
             p["stackGroups"] = json!(stack_groups);
+            p["resetBursts"] = json!(reset_bursts);
             app.run("photo.analyze", p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {

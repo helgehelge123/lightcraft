@@ -333,6 +333,21 @@ pub struct Analysis {
     /// Focus of the whole frame, kept beside a subject score (`None` when `sharpness` is it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<f32>,
+    /// Set when the person arranged this photo's burst by hand (Window ▸ Bursts, or
+    /// `photo.moveToBurst`): its place in [`Analysis::group`], 0 being the pick, or `Some(0)` for
+    /// a photo taken out of every burst. Culling run again keeps such a photo's burst, place and
+    /// pick (unless asked to regroup). `None` while the burst is as culling made it; left out of the
+    /// catalog JSON then, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+}
+
+impl Analysis {
+    /// Whether the person placed this photo by hand (see [`Analysis::rank`]).
+    pub fn by_hand(&self) -> bool {
+        self.rank.is_some()
+
+    }
 }
 
 /// What assisted culling's focus score was measured on.
