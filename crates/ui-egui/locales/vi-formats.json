@@ -298,5 +298,14 @@
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
   "…and {more} more": "…và {more} nữa",
-  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} giây, bộ mã hóa ảnh {encoder:.1} giây"
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} giây, bộ mã hóa ảnh {encoder:.1} giây",
+  "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected": "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected",
+  "Denoise cancelled: {ready} of {total} photos done": "Denoise cancelled: {ready} of {total} photos done",
+  "Describing and selecting: {name}": "Describing and selecting: {name}",
+  "Finding subjects cancelled: {made} Subject masks made": "Finding subjects cancelled: {made} Subject masks made",
+  "Photo {n} of {total}: {pct} %": "Photo {n} of {total}: {pct} %",
+  "{made} Subject masks made, {skipped} skipped, {failed} failed": "{made} Subject masks made, {skipped} skipped, {failed} failed",
+  "{ready} photos denoised": "{ready} photos denoised",
+  "{ready} photos denoised, {failed} failed": "{ready} photos denoised, {failed} failed",
+  "{} is still running: wait for it, or cancel it": "{} is still running: wait for it, or cancel it"
 }

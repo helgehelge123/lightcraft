@@ -298,5 +298,14 @@
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}, resolusi maksimum untuk panorama (resolusi penuhnya {full})",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
-  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} dtk, penyandi gambar {encoder:.1} dtk"
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} dtk, penyandi gambar {encoder:.1} dtk",
+  "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected": "Assisted Culling: {groups} bursts, {picked} picked, {rejected} rejected",
+  "Denoise cancelled: {ready} of {total} photos done": "Denoise cancelled: {ready} of {total} photos done",
+  "Describing and selecting: {name}": "Describing and selecting: {name}",
+  "Finding subjects cancelled: {made} Subject masks made": "Finding subjects cancelled: {made} Subject masks made",
+  "Photo {n} of {total}: {pct} %": "Photo {n} of {total}: {pct} %",
+  "{made} Subject masks made, {skipped} skipped, {failed} failed": "{made} Subject masks made, {skipped} skipped, {failed} failed",
+  "{ready} photos denoised": "{ready} photos denoised",
+  "{ready} photos denoised, {failed} failed": "{ready} photos denoised, {failed} failed",
+  "{} is still running: wait for it, or cancel it": "{} is still running: wait for it, or cancel it"
 }
