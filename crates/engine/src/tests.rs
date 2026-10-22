@@ -1386,8 +1386,14 @@ fn a_masks_local_curve_through_the_curve_commands() {
     // one undo step per change
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(curve_of(&s, 0).master.is_empty() && curve_of(&s, 0).red.len() == 4);
-    // what isn't a mask's curve is refused, nothing changed
+    // a malformed point refuses the request: the mask's curve and the Tone Curve stay as they were
     let before = active_dev(&s);
+    for bad in [json!([[0.5, "x"]]), json!([[0.0, 0.0], [0.5]]), json!([[0.0, 0.0], {"x": 1}]), json!([[0.0, 0.0, 1.0]])] {
+        assert!(s.execute("develop.curve", &json!({"channel": "red", "points": bad, "mask": ids[0]})).is_err(), "{bad}");
+        assert!(s.execute("develop.curve", &json!({"channel": "red", "points": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(active_dev(&s), before, "nothing changed");
+    // what isn't a mask's curve is refused, nothing changed
     assert!(s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": 99})).is_err());
     assert!(s.execute("develop.curve", &json!({"channel": "parametric", "points": s_curve, "mask": ids[0]})).is_err());
     assert!(s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": "first"})).is_err());

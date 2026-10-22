@@ -516,13 +516,22 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let ch = str_param(p, "channel").unwrap_or("master").to_string();
                 let mask = super::curves::mask_param(p, "develop.curve")?;
+                // every point is [x, y] (finite numbers, clamped to 0..1): one that isn't refuses the whole
+                // request, so it never replaces a curve with what is left of it
                 let mut pts: Vec<Point> = p
                     .get("points")
                     .and_then(Value::as_array)
                     .ok_or_else(|| bad("develop.curve", "missing points"))?
                     .iter()
-                    .filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?.clamp(0.0, 1.0), q.get(1)?.as_f64()?.clamp(0.0, 1.0))))
-                    .collect();
+                    .enumerate()
+                    .map(|(i, q)| {
+                        let xy = q.as_array().filter(|a| a.len() == 2).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+                        match xy {
+                            Some((x, y)) if x.is_finite() && y.is_finite() => Ok(Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))),
+                            _ => Err(bad("develop.curve", format!("point {i} is not [x, y] with two numbers: {q}"))),
+                        }
+                    })
+                    .collect::<Result<_>>()?;
                 // stored in the order the curve runs, as the editor draws and drags them
                 pts.sort_by(|a, b| a.x.total_cmp(&b.x));
                 if let Some(m) = mask {
