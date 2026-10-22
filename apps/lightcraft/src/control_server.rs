@@ -299,11 +299,18 @@ mod tests {
     fn persistent_requests_and_slow_replies_outlive_the_idle_read_timeout() {
         let open = Arc::new(AtomicUsize::new(0));
         let mut connection = Connection::new(&open, Duration::from_millis(100));
+        writeln!(connection.client.get_mut(), "{}", json!({"id": 1, "method": "engine.commands"})).unwrap();
         for id in [1, 2] {
-            writeln!(connection.client.get_mut(), "{}", json!({"id": id, "method": "engine.commands"})).unwrap();
             let req = connection.requests.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(req.method, "engine.commands");
             assert!(req.take());
+            // Everything else the client sends goes out while the server waits for this reply, so
+            // it is in the socket before the server reads again: a test thread scheduled late (a
+            // loaded CI machine, issue #2538) can't let the 100 ms idle timeout fire in between.
+            if id == 1 {
+                writeln!(connection.client.get_mut(), "{}", json!({"id": 2, "method": "engine.commands"})).unwrap();
+                connection.client.get_mut().shutdown(std::net::Shutdown::Write).unwrap();
+            }
             // A dispatched command waits for its reply, not for socket input.
             std::thread::sleep(Duration::from_millis(250));
             req.reply.send(json!({"ok": true, "result": id})).unwrap();
@@ -312,7 +319,6 @@ mod tests {
             let reply: Value = serde_json::from_str(&reply).unwrap();
             assert_eq!(reply, json!({"id": id, "ok": true, "result": id}));
         }
-        connection.client.get_mut().shutdown(std::net::Shutdown::Write).unwrap();
         let mut eof = String::new();
         connection.client.read_to_string(&mut eof).unwrap();
         connection.join();
