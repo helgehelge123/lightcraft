@@ -9,3 +9,5 @@ mod fallback;
 mod gpu_probe;
 #[cfg(feature = "sam")]
 mod sam3_backbone;
+#[cfg(feature = "sam")]
+mod sam3_necks;
