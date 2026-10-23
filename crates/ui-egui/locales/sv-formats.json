@@ -297,5 +297,6 @@
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}"
+  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} s, bildkodare {encoder:.1} s"
 }
