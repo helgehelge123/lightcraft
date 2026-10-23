@@ -37,7 +37,8 @@ commands:
   ci [--hardware] [--summary-md]
                   fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
                   (stops at first failure). Tests run under cargo test (cargo nextest with
-                  LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc. Writes
+                  LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
+                  them it prints the translation gaps report (never a failure). Writes
                   target/ci/report.json (machine, GPU adapters, data,
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
                   every backend with a hardware adapter; --summary-md prints the Markdown summary
@@ -238,6 +239,39 @@ fn doctests() -> (Command, String) {
     (c, "cargo test --workspace --doc".to_owned())
 }
 
+/// The test that prints the messages each language lacks (shown in English); it always passes.
+const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
+
+/// Print the translation gaps report into the log: [`TRANSLATION_GAPS_TEST`] of lightcraft-ui-egui,
+/// run from the test binary the test step built (found with `--no-run` and the step's own
+/// arguments, so nothing rebuilds). A report that can't run is a note, never a failed step.
+fn translation_gaps() {
+    eprintln!("\n=== ci: translation gaps ===");
+    let mut c = cargo();
+    c.args(["test", "--no-run", "--message-format=json"]).args(with_test_targets(&["--workspace"]));
+    let binary = c.output().map_err(|e| format!("cargo test --no-run: {e}")).and_then(|out| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|m| {
+                m["reason"] == "compiler-artifact"
+                    && m["target"]["name"] == "lightcraft_ui_egui"
+                    && m["profile"]["test"] == true
+                    && m["target"]["kind"].as_array().is_some_and(|kinds| kinds.iter().any(|kind| kind == "lib"))
+            })
+            .and_then(|m| m["executable"].as_str().map(PathBuf::from))
+            .ok_or_else(|| format!("no lightcraft-ui-egui test binary in the build (cargo exited with {})", out.status))
+    });
+    let ran = binary.and_then(|binary| {
+        let mut c = Command::new(&binary);
+        c.args(["--exact", TRANSLATION_GAPS_TEST, "--nocapture", "--quiet"]);
+        run(c, &format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display()))
+    });
+    if let Err(e) = ran {
+        eprintln!("note: the translation gaps report did not run: {e}");
+    }
+}
+
 pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
     eprintln!("$ {what}");
     let status = cmd.status().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
@@ -435,6 +469,7 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         if *name == "test" {
             // right after the workspace tests, before parity and wasm build other feature sets
             probe();
+            translation_gaps();
         }
         if let Err(e) = r {
             failure = Some((*name, e));
