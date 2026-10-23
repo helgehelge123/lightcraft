@@ -12,4 +12,6 @@ mod sam3_backbone;
 #[cfg(feature = "sam")]
 mod sam3_detr;
 #[cfg(feature = "sam")]
+mod sam3_mask_decoder;
+#[cfg(feature = "sam")]
 mod sam3_necks;
