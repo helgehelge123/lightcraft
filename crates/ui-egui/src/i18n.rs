@@ -1149,6 +1149,20 @@ mod tests {
             let no = format!(" {}", bool_text_in(Locale::De, false));
             assert!(rules_label(&rules, &catalog).ends_with(&no), "{}", rules_label(&rules, &catalog));
         }
+        let both = lightcraft_catalog::Filter {
+            label: Some(lightcraft_catalog::ColorLabel::Red),
+            labels: vec![lightcraft_catalog::ColorLabel::Blue, lightcraft_catalog::ColorLabel::Red],
+            ..Default::default()
+        };
+        let name = |label| color_label(&app.session.catalog, label);
+        let (red, blue, green) =
+            (name(lightcraft_catalog::ColorLabel::Red), name(lightcraft_catalog::ColorLabel::Blue), name(lightcraft_catalog::ColorLabel::Green));
+        let (label, and, or) = (tr("Label"), tr("and"), tr("or"));
+        assert_eq!(filter_label(&both, &app.session.catalog), format!("{label}: {red}"));
+        let both = lightcraft_catalog::Filter { labels: vec![lightcraft_catalog::ColorLabel::Blue], ..both };
+        assert_eq!(filter_label(&both, &app.session.catalog), format!("{label}: {red} {and} {blue}"));
+        let both = lightcraft_catalog::Filter { labels: vec![lightcraft_catalog::ColorLabel::Blue, lightcraft_catalog::ColorLabel::Green], ..both };
+        assert_eq!(filter_label(&both, &app.session.catalog), format!("{label}: {red} {and} ({blue} {or} {green})"));
         let filter = lightcraft_catalog::Filter {
             labels: vec![lightcraft_catalog::ColorLabel::Red, lightcraft_catalog::ColorLabel::Blue],
             ..Default::default()
