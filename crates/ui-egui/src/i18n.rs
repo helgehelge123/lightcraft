@@ -914,8 +914,8 @@ mod tests {
         let chars: Vec<char> = src.chars().collect();
         let at = |i: usize| chars.get(i).copied().unwrap_or('\0');
         let ident = |c: char| c.is_alphanumeric() || c == '_';
-        // where the inside of a `#[cfg…]` or `#![cfg…]` attribute starts; other attributes are read as
-        // code, so the strings in `#[error("…")]` are checked
+        // where the inside of a `#[cfg(…)]` or `#![cfg(…)]` attribute starts; other attributes are read
+        // as code, so the strings in `#[error("…")]` and `#[cfg_attr(…, error("…"))]` are checked
         let cfg_start = |i: usize| {
             let open = if at(i) == '#' && at(i + 1) == '[' {
                 i + 2
@@ -925,7 +925,27 @@ mod tests {
                 return None;
             };
             let name = (open..chars.len()).find(|&j| !chars[j].is_whitespace())?;
-            chars[name..].starts_with(&['c', 'f', 'g']).then_some(open)
+            let paren = (name + 3..chars.len()).find(|&j| !chars[j].is_whitespace())?;
+            (chars[name..].starts_with(&['c', 'f', 'g']) && chars[paren] == '(').then_some(open)
+        };
+        // whether `test` is one of the top-level conditions of an `all(…)`: `all(unix, any(test, …))`
+        // can ship without it
+        let all_has_test = |args: &str| {
+            let (mut level, mut from) = (0, 0);
+            for (k, ch) in args.char_indices().chain([(args.len(), ',')]) {
+                match ch {
+                    '(' => level += 1,
+                    ')' => level -= 1,
+                    ',' if level == 0 => {
+                        if &args[from..k] == "test" {
+                            return true;
+                        }
+                        from = k + 1;
+                    }
+                    _ => {}
+                }
+            }
+            false
         };
         let (mut out, mut i, mut line) = (Vec::new(), 0, 1);
         let (mut depth, mut test_depth, mut pending_test) = (0usize, None, false);
@@ -968,7 +988,8 @@ mod tests {
                 }
             } else if let Some(start) = cfg_start(i) {
                 // `#[cfg(test)]` (spaces allowed) and `#[cfg(all(test, …))]` mark the next item as test
-                // code, `#![cfg(test)]` the rest of the file; `cfg(any(test, …))` code can ship, so it stays
+                // code up to its `;` or through its body, `#![cfg(test)]` the rest of the file;
+                // `cfg(any(test, …))` code can ship, so it stays
                 let mut end = start;
                 let mut nested = 1;
                 while end < chars.len() && nested > 0 {
@@ -981,7 +1002,7 @@ mod tests {
                     end += 1;
                 }
                 let attr: String = chars[start..end.saturating_sub(1)].iter().filter(|ch| !ch.is_whitespace()).collect();
-                let all_test = attr.starts_with("cfg(all(") && !attr.contains("not(") && attr.split([',', '(', ')']).any(|t| t == "test");
+                let all_test = attr.strip_prefix("cfg(all(").and_then(|rest| rest.strip_suffix("))")).is_some_and(all_has_test);
                 if attr == "cfg(test)" || all_test {
                     if c == '#' && at(i + 1) == '!' {
                         break;
@@ -998,7 +1019,7 @@ mod tests {
                     i += 1;
                 }
                 i += 1 + hashes;
-                if test_depth.is_none() {
+                if test_depth.is_none() && !pending_test {
                     out.push((first, text));
                 }
             } else if c == '"' {
@@ -1032,7 +1053,7 @@ mod tests {
                     }
                 }
                 i += 1;
-                if test_depth.is_none() {
+                if test_depth.is_none() && !pending_test {
                     out.push((first, text));
                 }
             } else if c == '\'' {
@@ -1082,11 +1103,28 @@ const Z: &str = "after";
 #[cfg(all(unix, test))] fn both() { "test"; }
 #[cfg(any(test, feature = "x"))] fn either() { "either"; }
 #[error("shown")] struct E;
+#[cfg(all(unix, any(test, feature = "y")))] fn nested() { "nested"; }
+#[cfg(all(test, not(feature = "y")))] fn negated() { "test"; }
+#[cfg(test)] const SYMBOL: &str = "test";
+const KEPT: &str = "kept";
+#[cfg_attr(feature = "y", error("conditional"))] struct C;
 #![cfg(test)]
 fn rest() { "test"; }"##;
         let found = string_literals(src);
         let found: Vec<(usize, &str)> = found.iter().map(|(line, text)| (*line, text.as_str())).collect();
-        assert_eq!(found, [(2, "one ▸ \"two\""), (3, "raw \"x\""), (4, "long line →"), (8, "after"), (11, "either"), (12, "shown")]);
+        let expected = [
+            (2, "one ▸ \"two\""),
+            (3, "raw \"x\""),
+            (4, "long line →"),
+            (8, "after"),
+            (11, "either"),
+            (12, "shown"),
+            (13, "nested"),
+            (16, "kept"),
+            (17, "y"),
+            (17, "conditional"),
+        ];
+        assert_eq!(found, expected);
     }
 
     /// Every symbol in the interface's own text has a glyph (issue #1950: ▸ showed as a box in the
