@@ -88,6 +88,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-22 | patch | Gap 28: View shows the current grid-cycle key beside Photo Grid and Square Grid (#2500); no new binding and no change to the remaining shortcut gap or hours |
 | 2026-10-22 | minor | Gap 15: the Print page setup and PDF gain the Japanese photo and postcard paper sizes (L判 89×127, 2L判 127×178, KG判 102×152, はがき 100×148, 往復はがき 148×200, 六切 203×254, 四切 254×305, 名刺 55×91 mm), by their customary names; gap not closed |
 | 2026-10-22 | minor | #2052: Thai glyphs added to shared export text; gap 21 retains Thai mark positioning, Arabic joining and bidi limits. No ranked gap closes; estimates unchanged |
+| 2026-10-24 | minor | LR-LIB-SMARTALBUM: relative-date views and source totals expire on the session-clock minute, including nested smart albums; ranked gaps and readiness counts unchanged |
 | 2026-10-22 | patch | XMP namespace-prefix collisions no longer overwrite foreign metadata; ranked gaps and estimates unchanged |
 | 2026-10-22 | patch | Issue #2519: PSD/PSB EXIF resource 1058 and XMP resource 1060 now use the common metadata extractor, and `.psb` files are accepted by import; no ranked gap or readiness count changes |
 | 2026-10-22 | minor | Gap 30 added: multi-select metadata editing — Info panel and All Metadata dialog show one photo's values with no mixed-value indication |
