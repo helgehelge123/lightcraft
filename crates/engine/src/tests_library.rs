@@ -314,6 +314,29 @@ fn smart_album_rule_sets() {
     assert!(a.to_string().contains("rating is ≥ 4"), "{a}");
 }
 
+/// `label` and `labels` set together (only through `library.filter`, or a filter saved with the
+/// single label) AND, and the chip says what they let through, not their union.
+#[test]
+fn filter_label_and_labels_together_chip() {
+    use lightcraft_catalog::ColorLabel;
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    for (id, l) in ids.iter().zip(["red", "yellow", "green"]) {
+        s.execute("photo.label", &json!({"ids": [id], "label": l})).unwrap();
+    }
+    let reds = s.catalog.photos().filter(|p| p.in_library() && p.label == Some(ColorLabel::Red)).count();
+    let chip = |s: &Session| crate::filter_chips(&s.filter, &s.catalog).into_iter().find(|c| c.label.starts_with("Label")).expect("a label chip");
+    s.execute("library.filter", &json!({"label": "red", "labels": ["yellow", "red"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), reds);
+    assert_eq!(chip(&s).label, "Label: Red");
+    // nothing passes both: the chip names both constraints
+    s.execute("library.filter", &json!({"label": "red", "labels": ["yellow", "green"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), 0);
+    assert_eq!(chip(&s).label, "Label: Red and (Yellow or Green)");
+    s.execute("library.filter", &chip(&s).clear).unwrap();
+    assert_eq!((s.filter.label, s.filter.labels.len()), (None, 0));
+}
+
 /// The filter bar's label multi-select: any of the chosen labels.
 #[test]
 fn filter_any_of_several_labels() {

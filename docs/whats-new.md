@@ -1,5 +1,24 @@
 # What's new in LightCraft
 
+## 2026-10-24
+
+### Relative-date filters and smart albums follow the clock
+- A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
+  minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
+  direct or nested smart albums. Held views keep photos that expired until Refresh View while admitting photos that
+  newly match; expiry itself does not create an undo step.
+
+### The histogram's tonal zones adjust the Basic tones
+- The histogram is a control surface again, as in Lightroom Classic: hovering one of its five zones (Blacks, Shadows,
+  Exposure, Highlights, Whites) tints it and shows its name and value under the plot ("Exposure: +0.45 EV"). Dragging one
+  sideways moves that control — the zone you pressed stays locked while the pointer crosses the others, Shift drags a
+  tenth as far, and the whole drag is one undo step. Double-clicking a zone puts its control back to its default.
+
+### Drag the parametric Tone Curve
+- In the Tone Curve's parametric mode the graph is now drawn from the renderer's own curve, so it always matches the
+  photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
+  Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts

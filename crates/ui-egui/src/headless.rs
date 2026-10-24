@@ -2020,6 +2020,30 @@ mod tests {
         assert!(deep.is_some_and(|n| n > 500), "scrolled rows: {later:?}");
     }
 
+    /// With `label` and `labels` both set (a saved single-label filter, or an agent), the filter
+    /// bar lights only the labels that pass both, and a click starts from those, not their union.
+    #[test]
+    fn filter_bar_labels_from_label_and_labels() {
+        use lightcraft_catalog::ColorLabel;
+        let mut h = demo([1400.0, 800.0]);
+        let t = Duration::from_secs(10);
+        h.request("engine.execute", json!({"command": "view.filterBar"}), t);
+        h.app.session.execute("library.filter", &json!({"label": "red", "labels": ["red", "yellow"]})).unwrap();
+        // a frame so the bar is laid out for the new filter before the click
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "filter:label-green"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let f = h.app.session.filter.clone();
+        assert_eq!((f.label, f.labels), (None, vec![ColorLabel::Red, ColorLabel::Green]));
+        // nothing passes both: nothing is lit, so a click shows just that label
+        h.app.session.execute("library.filter", &json!({"label": "red", "labels": ["yellow"]})).unwrap();
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "filter:label-green"}), t);
+        let f = h.app.session.filter.clone();
+        assert_eq!((f.label, f.labels), (None, vec![ColorLabel::Green]));
+        h.settle(SETTLE);
+    }
+
     /// The filter bar drives `library.filter` and saves the view as a smart album.
     #[test]
     fn filter_bar_filters_and_saves_a_smart_album() {
