@@ -1046,7 +1046,7 @@ mod tests {
                 tag: Tag::NewPrompt { photo, mask: None, op: "add".into(), name: Some("Sky".into()), text: "sky".into() },
                 result,
                 superseded: false,
-            notice: None,
+                notice: None,
             };
             let mut polled = Polled::default();
             s.apply_outcome(outcome, &mut polled);

@@ -420,6 +420,8 @@ fn a_window_picks_no_source_for_a_content_aware_spot() {
     }
     let heal = with_spot(SpotMode::Heal, (0.40, 0.5), None);
     assert!(crate::plan(&src, &info, &heal, &req).settings.spots[0].source_offset.is_some(), "Heal still gets one fixed from the whole frame");
+}
+
 /// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:
 /// 4.5 % of the long edge).
 const OVERLAY_INSET: usize = W * 45 / 1000;

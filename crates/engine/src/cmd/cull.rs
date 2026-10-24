@@ -431,7 +431,14 @@ fn apply(s: &mut Session, params: &Params, mut rows: Vec<Row>, failed: Vec<Value
     let (mut rejected, mut picked) = (0, 0);
     let mut out = Vec::new();
     for (i, r) in rows.iter().enumerate() {
-        let scores = |a: Analysis| Analysis { sharpness: r.sharp, clipped: r.clip, subject: r.subject, focus_on: r.focus_on, frame: r.subject.map(|_| r.frame), ..a };
+        let scores = |a: Analysis| Analysis {
+            sharpness: r.sharp,
+            clipped: r.clip,
+            subject: r.subject,
+            focus_on: r.focus_on,
+            frame: r.subject.map(|_| r.frame),
+            ..a
+        };
         let analysis = match kept[i] {
             Some(k) => scores(k),
             None => {

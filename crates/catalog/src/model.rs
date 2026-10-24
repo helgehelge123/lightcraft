@@ -346,7 +346,6 @@ impl Analysis {
     /// Whether the person placed this photo by hand (see [`Analysis::rank`]).
     pub fn by_hand(&self) -> bool {
         self.rank.is_some()
-
     }
 }
 
