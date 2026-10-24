@@ -234,14 +234,15 @@ pub struct Headless {
     /// Logical size (points) and scale.
     pub size: egui::Vec2,
     pub pixels_per_point: f32,
-    time: f64,
+    pub(crate) time: f64,
     frames: u64,
     pub(crate) events: Vec<egui::Event>,
     control: Sender<ControlRequest>,
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
     pub window_maximized: bool,
-    /// Window-management commands the app sent (`StartDrag`, `Maximized`, …), oldest first.
+    /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`,
+    /// `CursorPosition`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
     /// The pointer cursor the last frame asked for (what a real host would show).
     pub last_cursor: egui::CursorIcon,
@@ -342,7 +343,8 @@ impl Headless {
                     self.window_maximized = on;
                     self.window_commands.push(c);
                 }
-                ViewportCommand::StartDrag => self.window_commands.push(c),
+                // recorded, not carried out: the simulated pointer moves only when a test moves it
+                ViewportCommand::StartDrag | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => self.window_commands.push(c),
                 _ => {}
             }
         }
@@ -3362,7 +3364,7 @@ mod tests {
     }
 
     /// Switching Settings tabs keeps the window's top edge (and its tab row) where it is and never makes it
-    /// narrower, though the tabs are of different heights and widths.
+    /// narrower or taller, though the tabs hold different amounts: the window is one size on every tab.
     #[test]
     fn settings_tabs_keep_the_window_in_place() {
         let mut h = demo([1300.0, 820.0]);
@@ -3381,7 +3383,7 @@ mod tests {
             assert!(now.width() >= first.width() - 1.0, "{tab}: width {} → {}", first.width(), now.width());
             heights.push(now.height());
         }
-        assert!(heights.iter().any(|h| (h - first.height()).abs() > 20.0), "the tabs differ in height: {heights:?}");
+        assert!(heights.iter().all(|h| (h - first.height()).abs() < 1.0), "the tabs keep the height of {}: {heights:?}", first.height());
     }
 
     /// Settings → Import → "Show the import review when a camera or card is connected": a card that
