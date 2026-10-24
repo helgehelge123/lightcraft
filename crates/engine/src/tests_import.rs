@@ -263,6 +263,70 @@ fn find_missing_plan_is_rechecked_when_applied() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A library made on Windows names its originals with Windows paths; opened on macOS or Linux
+/// they are missing until Find Missing finds them by name, there as everywhere: the name follows
+/// the last `/` or `\`, any letter case, the size checked when one is on record, look-alikes
+/// reported rather than guessed, and undo puts back the path exactly as spelled.
+#[test]
+fn find_missing_finds_the_files_of_a_library_made_on_windows() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    let dir = temp_dir("missing-windows");
+    for (rel, bytes) in [("found/a.jpg", &b"x"[..]), ("found/deep/b.jpg", b"xyz"), ("found/one/twin.jpg", b"x"), ("found/two/twin.jpg", b"x")] {
+        std::fs::create_dir_all(dir.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(rel), bytes).unwrap();
+    }
+    let mut s = Session::new();
+    // as a Windows library may list them: no content hash, and a size only for b
+    let mut add = |path: &str, size: u64| {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: path.into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+        p.file_size = size;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let (a, b, twin) = (add(r"C:\Users\me\Photos\a.jpg", 0), add(r"D:\Shoot\2019\B.JPG", 3), add(r"C:\Users\me\Photos\twin.jpg", 0));
+    let path_of = |s: &Session, id: PhotoId| match &s.catalog.photo(id).unwrap().source {
+        Source::File { path } => path.clone(),
+        _ => String::new(),
+    };
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+    assert_eq!(path_of(&s, a), dir.join("found").join("a.jpg").to_string_lossy(), "found by its name: {r}");
+    assert_eq!(path_of(&s, b), dir.join("found").join("deep").join("b.jpg").to_string_lossy(), "found by its name, any case, and size: {r}");
+    assert_eq!(path_of(&s, twin), r"C:\Users\me\Photos\twin.jpg", "two files of its name: not guessed: {r}");
+    assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "both look-alikes reported: {r}");
+    assert_eq!(r["missing"], 1, "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(
+        (path_of(&s, a), path_of(&s, b)),
+        (r"C:\Users\me\Photos\a.jpg".to_string(), r"D:\Shoot\2019\B.JPG".to_string()),
+        "one undo step puts back the Windows paths as they were spelled"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// On macOS and Linux `\` may be part of a file name. Find Missing names the files it finds by
+/// the same rule as the missing photos, so `a\b.jpg` isn't relinked to a `b.jpg` beside it
+/// unasked: the two are reported as look-alikes.
+#[cfg(unix)]
+#[test]
+fn find_missing_does_not_take_a_look_alike_for_a_file_name_with_a_backslash() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("missing-backslash");
+    std::fs::create_dir_all(dir.join("found")).unwrap();
+    for name in [r"a\b.jpg", "b.jpg"] {
+        std::fs::write(dir.join("found").join(name), b"x").unwrap();
+    }
+    let mut s = Session::new();
+    let gone = dir.join("gone").join(r"a\b.jpg").to_string_lossy().to_string();
+    let id = s.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: gone.clone() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+    assert!(matches!(&s.catalog.photo(id).unwrap().source, Source::File { path } if *path == gone), "not relinked to b.jpg: {r}");
+    assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "both reported: {r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn missing_files_are_found_and_relinked() {
     let dir = std::env::temp_dir().join(format!("lc-missing-{}", std::process::id()));
@@ -1001,6 +1065,54 @@ fn assisted_culling_groups_bursts_across_month_end() {
         let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
         assert_eq!(r["groups"], 1, "shots 1 s apart ({before} / {after}) must form a burst: {r}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assisted culling: `burstGap` and `similarity` move the burst limits (#2275), and values out of
+/// range are refused before anything is measured or stored.
+#[test]
+fn assisted_culling_burst_limits_are_adjustable() {
+    let dir = temp_dir("cull-limits");
+    for (name, (w, h)) in [("a.png", (480, 320)), ("b.png", (482, 321))] {
+        let img = lightcraft_scenes::demo_library()[0].render(w, h);
+        let data: Vec<[u8; 4]> = img
+            .data
+            .iter()
+            .map(|c| {
+                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                [e(c[0]), e(c[1]), e(c[2]), 255]
+            })
+            .collect();
+        let png = lightcraft_codecs::encode_png(
+            &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+            &Default::default(),
+        )
+        .unwrap();
+        std::fs::write(dir.join(name), png).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    let (a, b) = (by_name(&s, "a.png"), by_name(&s, "b.png"));
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: a, captured: Some("2026-05-01T10:00:00".into()) }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: b, captured: Some("2026-05-01T10:00:15".into()) }).unwrap();
+    // 15 s apart: past the default 10 s, inside a 20 s gap
+    assert_eq!(s.execute("photo.analyze", &json!({"ids": ids})).unwrap()["groups"], 0);
+    assert_eq!(s.execute("photo.analyze", &json!({"ids": ids, "burstGap": 20})).unwrap()["groups"], 1);
+    // the look-alike pair is a burst at the default similarity, not when it must be identical
+    let strict = s.execute("photo.analyze", &json!({"ids": ids, "burstGap": 20, "similarity": 1.0})).unwrap();
+    assert_eq!(strict["groups"], 0, "{strict}");
+    // bad values change nothing
+    let undo_before = s.commits();
+    for bad in
+        [json!({"burstGap": -1}), json!({"burstGap": 86401}), json!({"burstGap": "10"}), json!({"similarity": 1.5}), json!({"similarity": -0.1})]
+    {
+        let mut p = bad.clone();
+        p["ids"] = json!(ids);
+        assert!(s.execute("photo.analyze", &p).is_err(), "{bad} must be refused");
+    }
+    assert_eq!(s.commits(), undo_before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

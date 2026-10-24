@@ -1177,6 +1177,22 @@ pub(crate) mod tests {
         assert_eq!(super::meta_of(&m).0.keywords, ["travel|Italy|Rome", "beach"]);
     }
 
+    #[test]
+    fn psd_probe_reads_embedded_capture_time_gps_and_title() {
+        let capture = lightcraft_meta::DateTime::parse_iso("2023-05-14T14:40:39").unwrap();
+        let metadata = lightcraft_meta::Metadata {
+            capture_time: Some(capture),
+            gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }),
+            title: Some("PSD metadata".into()),
+            ..Default::default()
+        };
+        let bytes = crate::tests_xmp::synthetic_psd_with_metadata(&metadata);
+        let probe = probe_bytes("metadata.psd", &bytes).unwrap();
+        assert_eq!(probe.captured.as_deref(), Some("2023-05-14T14:40:39"));
+        assert_eq!(probe.meta.gps, Some((45.0, 7.0)));
+        assert_eq!(probe.meta.title, "PSD metadata");
+    }
+
     use super::*;
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
 
