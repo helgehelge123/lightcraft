@@ -133,7 +133,14 @@ fn watermark_preview(
                 Ok(img) => img,
                 Err(e) => {
                     let note = if e.is_some() { "Preview unavailable" } else { "Loading preview…" };
-                    let r = ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                    let r = ui
+                        .horizontal(|ui| {
+                            if e.is_none() {
+                                crate::progress::spinner(ui, 12.0);
+                            }
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim))
+                        })
+                        .inner;
                     if let Some(e) = e {
                         r.on_hover_text(e);
                     }
@@ -261,6 +268,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
+        Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::SaveEffect { .. } => "New Effect Preset",
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
@@ -300,6 +308,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let mut content_w = 0.0f32;
     let mut body_h = None;
+    // before the window: drawing it closes a dropdown the click lands outside of
+    let popup_was_open = egui::Popup::is_any_open(ctx);
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
         .collapsible(false)
         .resizable(import)
@@ -315,6 +325,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
+            Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
         })
@@ -553,10 +564,18 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             "shift" => params["shift"].as_i64(),
                             _ => Some((*zone as f64 * 3600.0).round() as i64),
                         };
-                        let after = delta.and_then(|d| lightcraft_catalog::dates::shift_iso(&cur, d));
+                        // the photo's own time is the problem (a Lightroom catalog's capture time
+                        // is copied verbatim), not what was typed
+                        let unreadable = lightcraft_catalog::dates::shift_iso(&cur, 0).is_none();
+                        let after = match (mode.as_str(), unreadable && n == 1) {
+                            // alone, it simply gets the time typed (photo.setCaptureTime repairs it)
+                            ("set", true) => lightcraft_catalog::dates::normalize_iso(time),
+                            _ => delta.and_then(|d| lightcraft_catalog::dates::shift_iso(&cur, d)),
+                        };
                         ui.label(
                             egui::RichText::new(match after {
                                 Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
+                                None if unreadable && !(mode == "set" && n == 1) => crate::i18n::tr("The active photo's capture time can't be read").to_string(),
                                 None => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
                             })
                             .color(t.text_label),
@@ -641,7 +660,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             });
                         }
                         None => {
-                            ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
+                            ui.horizontal(|ui| {
+                                crate::progress::spinner(ui, 12.0);
+                                ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
+                            });
                         }
                     }
                     let more = total.saturating_sub(RENAME_PREVIEW_ROWS);
@@ -1114,7 +1136,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
-                Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
+                // (Settings is never taller than `body_max`, so the scroll area round it never
+                // scrolls: its tab bar stays put and its pages scroll by themselves)
+                Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
                 Dialog::KeywordTag {
                     editing,
@@ -1274,13 +1298,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::LightroomCatalog { folder, catalog } => {
                     ui.label(crate::i18n::tr("This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?"));
                     ui.label(egui::RichText::new(catalog.as_deref().unwrap_or(folder.as_str())).color(t.text_dim));
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(
-                            "The import reads the catalog without changing it and adds its photos, edits, keywords and collections to the library open now.",
-                        ))
-                        .color(t.text_dim),
-                    );
+                    // (the import then asks where the catalog goes, unless Settings says to merge, #2672)
+                    let asks = app.ui.settings.lightroom_import == crate::state::LightroomImport::Ask
+                        && app.session.library.as_ref().is_some_and(|l| l.on_disk);
+                    let what = if asks {
+                        "The import reads the catalog without changing it. Next, choose whether its photos, edits, keywords and collections join the library open now or go into a new library."
+                    } else {
+                        "The import reads the catalog without changing it and adds its photos, edits, keywords and collections to the library open now."
+                    };
+                    ui.label(egui::RichText::new(crate::i18n::tr(what)).color(t.text_dim));
                 }
+                d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
                 Dialog::RemoveFolder { name, count, path, disk } => {
                     ui.label(crate::i18n::tr_format!(
                         "Remove “{name}” and its {count} photo{} from the library?",
@@ -1398,6 +1426,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::KeywordTag { .. } => "Save",
                     Dialog::RemoveFolder { .. } => "Remove",
                     Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
+                    d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
                     Dialog::SynchronizeFolder { .. } if informational => "Close",
                     Dialog::SynchronizeFolder { .. } => "Synchronize",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
@@ -1467,6 +1496,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
+    if let Some(w) = &shown {
+        // (the import review keeps its hand-picked photos however the click lands)
+        if app.ui.settings.close_dialogs_outside && !import && clicked_backdrop(ctx, w.response.rect, popup_was_open) {
+            close = true;
+        }
+    }
     if let Some(w) = shown {
         ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
         if let Some(body_h) = body_h {
@@ -1487,7 +1522,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if confirm {
         match confirm_dialog(app, &dlg) {
             // the import review stays open on an error (e.g. an unusable folder template), and so
-            // does Export (e.g. no folder chosen) so the choices aren't lost
+            // does Export (e.g. no folder chosen) so the choices aren't lost, and Edit Capture Time
+            // (a time that isn't a date, or a shift it refuses)
             Err(e)
                 if matches!(
                     dlg,
@@ -1503,6 +1539,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         | Dialog::KeywordSet { .. }
                         | Dialog::SynchronizeFolder { .. }
                         | Dialog::SaveEffect { .. }
+                        | Dialog::CaptureTime { .. }
                 ) =>
             {
                 app.toast(ctx, e)
@@ -1530,6 +1567,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.toast(ctx, e);
                 close = true;
             }
+            // photos whose capture time doesn't read are left as they were: say so
+            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["unreadable"].as_u64().is_some_and(|n| n > 0) => {
+                app.toast(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
+                close = true;
+            }
+            // where a Lightroom catalog goes: stays open to be corrected (a folder that isn't
+            // empty), unless the library it names has gone
+            Err(e) if matches!(dlg, Dialog::LightroomDestination { .. }) => {
+                close = !crate::lightroom_destination::keeps_open_on_error(app, &dlg);
+                app.toast(ctx, e);
+            }
             Ok(_) if keeps_open(app, &dlg) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
                     *error = None;
@@ -1542,7 +1590,48 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
         return;
     }
+    if !close {
+        let frame = ctx.cumulative_frame_nr();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(BACKDROP_SHOWN), frame));
+    }
     app.ui.dialog = if close { None } else { Some(dlg) };
+}
+
+/// The last frame a dialog was drawn and stayed open, for [`clicked_backdrop`].
+const BACKDROP_SHOWN: &str = "dialog-backdrop-shown";
+
+/// A click on the dimmed backdrop around the dialog: it closes the dialog like Esc. Pressed and
+/// released outside the window, so a slider dragged past its edge doesn't close it; a press while a
+/// popup is open (a dropdown, a date picker's calendar) only closes the popup: `popup_was_open` is
+/// read before the window is drawn, since drawing it already closes the popup. Only a press made
+/// while the dialog is shown counts: in the frame a dialog appears, its input is the click that
+/// opened it (a quick click on a slow frame presses and releases in that one frame), so it never
+/// closes it. (Read from the raw events: egui forgets the press origin on release.)
+fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, popup_was_open: bool) -> bool {
+    let press_id = egui::Id::new("dialog-backdrop-press");
+    let frame = ctx.cumulative_frame_nr();
+    // the same frame too: a second pass of it gets no input
+    let shown = ctx.data(|d| d.get_temp::<u64>(egui::Id::new(BACKDROP_SHOWN))).is_some_and(|f| f + 1 >= frame);
+    if !shown {
+        ctx.data_mut(|d| d.remove_temp::<bool>(press_id));
+        return false;
+    }
+    let (press, release, clicked) = ctx.input(|i| {
+        let at = |down: bool| {
+            i.events.iter().rev().find_map(|e| match e {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } if *pressed == down => Some(*pos),
+                _ => None,
+            })
+        };
+        (at(true), at(false), i.pointer.primary_clicked())
+    });
+    if let Some(p) = press {
+        let outside = !window.contains(p) && !popup_was_open;
+        ctx.data_mut(|d| d.insert_temp(press_id, outside));
+    }
+    let Some(release) = release else { return false };
+    let pressed_outside = ctx.data_mut(|d| d.remove_temp::<bool>(press_id)).unwrap_or(false);
+    clicked && pressed_outside && !window.contains(release)
 }
 
 /// Room kept free above and below a dialog (#781).
@@ -1751,10 +1840,8 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
     let seg = &app.session.segmenter;
     if d.running {
         ui.add_space(4.0);
-        let frac = if d.total > 0 { d.done as f64 / d.total as f64 } else { 0.0 };
         let text = format!("{:.2} / {:.2} GB · {}", gb(d.done), gb(d.total), d.file);
-        let r = ui.add(egui::ProgressBar::new(frac as f32).text(text));
-        crate::widgets::register(ui.ctx(), "progress:samDownload", r.rect);
+        crate::progress::Progress::new(crate::progress::fraction_of(d.done, d.total)).label(text).widget("progress:samDownload").show(ui);
         let r = ui.button(crate::i18n::tr("Cancel Download"));
         crate::widgets::register(ui.ctx(), "button:samCancel", r.rect);
         if r.clicked() {
@@ -2020,6 +2107,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::LightroomCatalog { catalog, .. } => {
             app.run("file.importLightroom", catalog.as_ref().map_or_else(|| json!({}), |c| json!({"path": c})))
         }
+        d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::confirm(app, d),
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }
@@ -2332,13 +2420,15 @@ fn person_rename_plan(cat: &lightcraft_catalog::Catalog, from: &str, to: &str) -
     PersonRenamePlan { faces, needs_merge: needs_merge && from_key != to_key, block }
 }
 
-/// A dialog's one text field: it keeps the focus (except while its own menu has it) and opens
-/// with its text selected, so typing replaces it. True when Return confirms the dialog; Esc
-/// cancels the dialog (`show`). Taking the focus back with a bare `TextEdit` every frame hid the
-/// focus Return gives up, and Return did nothing.
+/// A dialog's one text field: it takes the focus when the dialog opens, and opens with its text
+/// selected, so typing replaces it. It takes the focus back only while nothing else has it: taking
+/// it back every frame would keep Tab from ever reaching the dialog's buttons and check boxes.
+/// True when Return confirms the dialog; Esc cancels the dialog (`show`).
 fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
     let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
-    if !r.editing {
+    // (and takes it back when nothing has it: after a click on the dialog's background or a check box,
+    // or when Return gave it up on a refusal; a control Tab reached keeps it)
+    if just_opened(ui, widget) || (!r.editing && r.ending.is_none() && ui.memory(|m| m.focused().is_none())) {
         r.response.request_focus();
     }
     r.ending == Some(crate::text_field::Ending::Return)

@@ -223,6 +223,7 @@
   "Delete the keyword “{name}”?": "Das Stichwort „{name}“ löschen?",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Es wird von {count} Foto{} entfernt, mit den Stichwörtern darunter. Rückgängig stellt es wieder her.",
   "Create Keyword Tag Inside “{name}”…": "Stichwort in „{name}“ erstellen…",
+  "Inside: {names}": "Darin: {names}",
   "“{parent}” has a “{name}” already. Merge the two?": "„{parent}“ enthält bereits „{name}“. Beide zusammenführen?",
   "There is a “{name}” at the top level already. Merge the two?": "Auf der obersten Ebene gibt es bereits „{name}“. Beide zusammenführen?",
   "Added “{keyword}” to {n} photo{}": "„{keyword}“ zu {n} Foto{} hinzugefügt",
@@ -297,5 +298,12 @@
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
   "Listing folders — folders: {folders}, files: {files}": "Ordner werden aufgelistet – Ordner: {folders}, Dateien: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Drop to review {n} item{} for import": "Ablegen, um vor dem Import zu prüfen (Objekte: {n}){:.0}",
+  "Drop to import {n} item{}": "Ablegen zum Importieren (Objekte: {n}){:.0}",
+  "Drop to import {n} preset{}": "Ablegen zum Importieren von Vorgaben: {n}{:.0}",
+  "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
+  "Added {n} photo{}": "{n} Foto{} hinzugefügt",
+  "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
 }

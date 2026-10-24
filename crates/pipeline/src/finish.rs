@@ -450,7 +450,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if dz != 0.0
                 && let Some(dark) = &p.dark
             {
-                let d = (dark.data[i] / air_pre).clamp(0.0, 1.0);
+                // The dark channel is a blur, not a patch minimum: near bright neighbours it credits
+                // dark pixels with veil they don't hold (and a windowed render borrows the whole
+                // frame's airlight), so the subtraction went past zero and crushed them to black
+                // (#2504). Never attribute more veil than the pixel's own minimum channel.
+                let c_min = c[0].min(c[1]).min(c[2]);
+                let d = (if air_pre > 0.0 { dark.data[i] / air_pre } else { 0.0 }).min(if air > 0.0 { c_min / air } else { 0.0 }).clamp(0.0, 1.0);
                 if dz > 0.0 {
                     let t = (1.0 - 0.95 * dz.min(1.0) * d).max(0.12);
                     c = c.map(|v| ((v - air * (1.0 - t)) / t).max(0.0));

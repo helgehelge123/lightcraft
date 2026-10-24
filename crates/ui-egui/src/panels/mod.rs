@@ -29,6 +29,7 @@ pub mod presets;
 pub mod profiles;
 pub mod right;
 pub mod rules_editor;
+pub mod rules_move;
 pub mod second;
 pub mod settings;
 pub mod slide_layout;
