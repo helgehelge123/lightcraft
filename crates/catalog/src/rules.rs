@@ -432,12 +432,79 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+thread_local! {
+    /// While [`AlbumPass`] is alive on this thread: the photos of each smart album that was counted whole, with
+    /// the longest chain of smart albums (itself included) its rules lead through.
+    static PASS: std::cell::RefCell<Option<std::collections::HashMap<crate::AlbumId, (usize, crate::tally::Members)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// One pass over one catalog state that counts every smart album whole. Each album put in with `remember`
+/// answers [`smart_album_holds`] from its photos, not from its rules, until the pass is dropped (it can't outlive
+/// the state it was made of: it exists only inside the counting function).
+///
+/// Only an album whose rules lead to no loop may be remembered, and only with the height of its chain: its answer
+/// then doesn't depend on which albums are being evaluated around it, as long as the chain still fits under
+/// [`MAX_ALBUM_DEPTH`] from where it is asked (checked on every use; otherwise the rules are evaluated as before).
+pub(crate) struct AlbumPass {
+    outer: Option<std::collections::HashMap<crate::AlbumId, (usize, crate::tally::Members)>>,
+}
+
+impl AlbumPass {
+    pub(crate) fn begin() -> AlbumPass {
+        AlbumPass { outer: PASS.with_borrow_mut(|p| p.replace(std::collections::HashMap::new())) }
+    }
+
+    /// `id` holds exactly `members`, and its rules lead through a chain of `height` smart albums (itself included),
+    /// none of them in a loop.
+    pub(crate) fn remember(&self, id: crate::AlbumId, height: usize, members: crate::tally::Members) {
+        PASS.with_borrow_mut(|p| {
+            if let Some(p) = p {
+                p.insert(id, (height, members));
+            }
+        });
+    }
+
+    /// Ends the pass, giving back what was remembered.
+    pub(crate) fn finish(self) -> std::collections::HashMap<crate::AlbumId, crate::tally::Members> {
+        PASS.with_borrow_mut(Option::take).unwrap_or_default().into_iter().map(|(id, (_, members))| (id, members)).collect()
+    }
+}
+
+impl Drop for AlbumPass {
+    fn drop(&mut self) {
+        let outer = self.outer.take();
+        PASS.with_borrow_mut(|p| *p = outer);
+    }
+}
+
+/// What a counting pass knows of smart album `id` for `photo`, when asking now can't give another answer than
+/// evaluating its rules would: the chain below it fits under [`MAX_ALBUM_DEPTH`] from the albums being evaluated.
+fn pass_answer(id: crate::AlbumId, photo: crate::PhotoId) -> Option<bool> {
+    PASS.with_borrow(|p| {
+        let (height, members) = p.as_ref()?.get(&id)?;
+        let depth = EVALUATING.with_borrow(Vec::len);
+        (depth + height <= MAX_ALBUM_DEPTH).then(|| members.holds(photo))
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times a smart album's rules were worked out on this thread (tests count them).
+    pub(crate) static EVALUATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether `photo` is in smart album `id`, by `matches` (its rules), remembered for the rest of the
 /// outermost question and guarded by [`evaluating`] (a loop or a chain too deep holds nothing).
 pub(crate) fn smart_album_holds(id: crate::AlbumId, photo: crate::PhotoId, matches: impl FnOnce() -> bool) -> bool {
+    if let Some(known) = pass_answer(id, photo) {
+        return known;
+    }
     if let Some(known) = ANSWERS.with_borrow(|a| a.get(&(id, photo)).copied()) {
         return known;
     }
+    #[cfg(test)]
+    EVALUATED.with(|n| n.set(n.get() + 1));
     // the outermost question forgets the answers when it ends, however it ends
     struct Forget(bool);
     impl Drop for Forget {
@@ -456,7 +523,7 @@ pub(crate) fn smart_album_holds(id: crate::AlbumId, photo: crate::PhotoId, match
 }
 
 /// How deep smart albums may test smart albums before the innermost counts as holding nothing.
-const MAX_ALBUM_DEPTH: usize = 32;
+pub(crate) const MAX_ALBUM_DEPTH: usize = 32;
 
 /// Run `f` as the evaluation of smart album `id`'s rules: `None` (so it holds nothing) when `id`
 /// is already being evaluated (a loop the check would refuse, saved anyway) or the chain is
@@ -668,6 +735,11 @@ fn number(v: &Value) -> Option<f64> {
         Value::String(s) => s.trim().trim_start_matches("f/").trim_end_matches("mm").trim().parse().ok(),
         _ => None,
     }
+}
+
+/// Widens an `f32` to the `f64` nearest its shortest decimal form (1.4f32 -> 1.4), so it compares equal to the value a user types.
+fn f32_as_decimal(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(v as f64)
 }
 
 fn num_op(op: &str, have: Option<f64>, value: &Value) -> bool {
@@ -953,8 +1025,8 @@ impl Rule {
             "editDate" => date_op(op, p.edited.as_deref(), value),
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),
             "iso" => num_op(op, m.iso.map(|v| v as f64), value),
-            "aperture" => num_op(op, m.aperture.map(|v| v as f64), value),
-            "focalLength" => num_op(op, m.focal_mm.map(|v| v as f64), value),
+            "aperture" => num_op(op, m.aperture.map(f32_as_decimal), value),
+            "focalLength" => num_op(op, m.focal_mm.map(f32_as_decimal), value),
             "longEdge" | "shortEdge" => {
                 let (w, h) = p.shown_size();
                 num_op(op, Some(if field == "longEdge" { w.max(h) } else { w.min(h) }.round()), value)
@@ -1127,6 +1199,25 @@ mod tests {
 
     fn rs(v: serde_json::Value) -> RuleSet {
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn f32_boundary_values_match_gte_lte() {
+        let cat = Catalog::new();
+        let matches =
+            |p: &Photo, field: &str, op: &str, value: f64| rs(json!({"rules": [{"field": field, "op": op, "value": value}]})).matches(p, &cat);
+        for v in [1.4f32, 1.8, 2.8, 5.6, 0.95] {
+            let mut p = photo(1);
+            p.meta.aperture = Some(v);
+            p.meta.focal_mm = Some(v);
+            let w = v.to_string().parse::<f64>().unwrap();
+            for field in ["aperture", "focalLength"] {
+                assert!(matches(&p, field, "gte", w), "{field} gte {w}");
+                assert!(matches(&p, field, "lte", w), "{field} lte {w}");
+                assert!(!matches(&p, field, "gt", w), "{field} gt {w}");
+                assert!(!matches(&p, field, "lt", w), "{field} lt {w}");
+            }
+        }
     }
 
     #[test]
