@@ -27,6 +27,7 @@ pub mod auto;
 pub mod blemish;
 pub mod colorops;
 pub mod cull;
+pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
@@ -44,6 +45,7 @@ pub mod transform;
 pub mod upright;
 pub mod visualize;
 
+pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
