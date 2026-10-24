@@ -159,7 +159,7 @@ essentials replaces its guessed 45% raw look with 84% × 0.75 (+1 point).
 | Discount | Mainstream | Essentials | Evidence |
 |---|---:|---:|---|
 | Interaction fidelity / UI clarity | ×0.95 | ×0.95 | brush live preview gaps and feathering (#517, #518); crop artefacts and limits (#731, #742, #770, #771); Compare white-balance selector (#743–#745); low-res slider previews (#330); dialogs taller than the window (#781); mouse-wheel scroll (#714) |
-| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); tests run in CI on FreeBSD only (gap 9) |
+| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer, fixed in 0.9.1); tests run in CI on Linux x64 and FreeBSD only (gap 9) |
 | File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, compressed ORF, HE NEF open as previews (#473, #485, #556), HEIC trouble (#693) |
 | **Product** | **×0.804** | **×0.830** | |
 
@@ -302,6 +302,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-22 | patch | AI Denoise row: RawNIND weights (CC BY 4.0, #1760) are a one-click download in the app instead of user-installed only; status and percentages unchanged |
+| 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |
 | 2026-10-19 | patch | Platforms: the Windows installer is no longer listed as unverified (the 0.9.1 x64 MSI is tested on Windows 11; a confirmation after uninstalling from Settings → Apps, #892, remains); #790 noted as fixed in 0.9.1; percentages and hours unchanged |
 | 2026-10-17 | minor | Object / Describe masks: SAM 3's necks and text detector's encoder also on the GPU outside macOS; status unchanged |

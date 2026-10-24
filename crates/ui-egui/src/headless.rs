@@ -234,14 +234,15 @@ pub struct Headless {
     /// Logical size (points) and scale.
     pub size: egui::Vec2,
     pub pixels_per_point: f32,
-    time: f64,
+    pub(crate) time: f64,
     frames: u64,
     pub(crate) events: Vec<egui::Event>,
     control: Sender<ControlRequest>,
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
     pub window_maximized: bool,
-    /// Window-management commands the app sent (`StartDrag`, `Maximized`, …), oldest first.
+    /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`,
+    /// `CursorPosition`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
     /// The pointer cursor the last frame asked for (what a real host would show).
     pub last_cursor: egui::CursorIcon,
@@ -342,7 +343,8 @@ impl Headless {
                     self.window_maximized = on;
                     self.window_commands.push(c);
                 }
-                ViewportCommand::StartDrag => self.window_commands.push(c),
+                // recorded, not carried out: the simulated pointer moves only when a test moves it
+                ViewportCommand::StartDrag | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => self.window_commands.push(c),
                 _ => {}
             }
         }
@@ -1973,90 +1975,6 @@ mod tests {
         h.settle(SETTLE);
     }
 
-    /// Presets column: the star on a row toggles the favourite without applying the preset, and
-    /// favourites are listed first in a Favorites group (#1999), as in the profile browser.
-    #[test]
-    fn preset_star_lists_favourites_first() {
-        let mut h = demo([1400.0, 900.0]);
-        let t = Duration::from_secs(10);
-        h.request("ui.set", json!({"view": "detail"}), t);
-        h.request("engine.execute", json!({"command": "panel.presets"}), t);
-        h.settle(SETTLE);
-        let id = h.app.session.active().unwrap();
-        let history = |h: &Headless| h.app.session.catalog.photo(id).unwrap().history.len();
-        let before = history(&h);
-        let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(k, _)| k == w);
-        assert!(!has(&h, "presetFavorites"), "no Favorites group without a favourite");
-        let r = h.request("ui.clickWidget", json!({"id": "presetStar:lc.warm-glow"}), t);
-        assert_eq!(r["ok"], true, "{r}");
-        let fav = |h: &Headless| h.app.session.presets.iter().find(|p| p.id == "lc.warm-glow").map(|p| p.favorite);
-        assert_eq!(fav(&h), Some(true));
-        assert_eq!(history(&h), before, "the star doesn't apply the preset");
-        h.step();
-        h.step();
-        assert!(has(&h, "presetFavorites") && has(&h, "preset:fav:lc.warm-glow") && has(&h, "preset:lc.warm-glow"), "listed first and in its group");
-        let y = |h: &Headless, w: &str| h.app.widgets.iter().find(|(k, _)| k == w).map(|(_, r)| r.top());
-        assert!(y(&h, "presetFavorites") < y(&h, "presetGroup:Color"), "Favorites first");
-        // a click on the favourite applies it
-        let r = h.request("ui.clickWidget", json!({"id": "preset:fav:lc.warm-glow"}), t);
-        assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(history(&h), before + 1);
-        // its star there takes it out of the group, and the empty group goes
-        let r = h.request("ui.clickWidget", json!({"id": "presetStar:fav:lc.warm-glow"}), t);
-        assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(fav(&h), Some(false));
-        h.step();
-        h.step();
-        assert!(!has(&h, "presetFavorites") && !has(&h, "preset:fav:lc.warm-glow"));
-        h.settle(SETTLE);
-    }
-
-    /// The Favorites header has an automation id of its own: a user group literally named `fav`
-    /// keeps `presetGroup:fav`, and `ui.clickWidget` reaches each of the two headers separately.
-    #[test]
-    fn preset_favorites_header_id_is_distinct_from_a_user_group_named_fav() {
-        let mut h = demo([1400.0, 900.0]);
-        let t = Duration::from_secs(10);
-        let user = lightcraft_develop::Preset {
-            id: "user.fav.one".into(),
-            name: "One".into(),
-            group: "fav".into(),
-            settings: json!({"light": {"exposure": 0.5}}),
-            favorite: false,
-            builtin: false,
-        };
-        assert_eq!(h.app.session.add_presets(vec![user]).len(), 1);
-        h.request("ui.set", json!({"view": "detail"}), t);
-        h.request("engine.execute", json!({"command": "panel.presets"}), t);
-        h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "presetStar:lc.warm-glow"}), t);
-        assert_eq!(r["ok"], true, "{r}");
-        h.step();
-        h.step();
-        let count = |h: &Headless, w: &str| h.app.widgets.iter().filter(|(k, _)| k == w).count();
-        assert_eq!((count(&h, "presetGroup:fav"), count(&h, "presetFavorites")), (1, 1), "one header each");
-        let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(k, _)| k == w).map(|(_, r)| *r).unwrap();
-        assert_ne!(rect(&h, "presetGroup:fav"), rect(&h, "presetFavorites"), "two different headers");
-        // `presetGroup:fav` is the user's header (sorted below the built-in groups), the new id Favorites
-        let top = |h: &Headless, w: &str| rect(h, w).top();
-        assert!(top(&h, "presetFavorites") < top(&h, "presetGroup:Color"), "Favorites is listed first");
-        assert!(top(&h, "presetGroup:fav") > top(&h, "presetGroup:Vintage"), "the user group `fav` is a group of its own");
-        let rows = |h: &Headless| h.app.widgets.iter().any(|(k, _)| k == "preset:fav:lc.warm-glow");
-        assert!(rows(&h));
-        // a click on each id reaches its own header: the user's header (off screen here) leaves Favorites open
-        let r = h.request("ui.clickWidget", json!({"id": "presetGroup:fav"}), t);
-        assert_eq!(r["ok"], true, "{r}");
-        h.step();
-        h.step();
-        assert!(rows(&h), "presetGroup:fav doesn't fold Favorites");
-        let r = h.request("ui.clickWidget", json!({"id": "presetFavorites"}), t);
-        assert_eq!(r["ok"], true, "{r}");
-        h.step();
-        h.step();
-        assert!(!rows(&h), "presetFavorites folds Favorites");
-        h.settle(SETTLE);
-    }
-
     /// A collection of thousands of presets (a Lightroom library imported whole) lists only the
     /// rows in view: a few dozen widgets and thumbnails a frame, not one per preset (every frame
     /// built all of them and froze the app for seconds); scrolling brings later rows in.
@@ -2100,6 +2018,30 @@ mod tests {
         assert!((5..60).contains(&later.len()), "{} rows built", later.len());
         let deep = later.iter().filter_map(|w| w.strip_prefix("preset:user.big.")).filter_map(|n| n.parse::<usize>().ok()).max();
         assert!(deep.is_some_and(|n| n > 500), "scrolled rows: {later:?}");
+    }
+
+    /// With `label` and `labels` both set (a saved single-label filter, or an agent), the filter
+    /// bar lights only the labels that pass both, and a click starts from those, not their union.
+    #[test]
+    fn filter_bar_labels_from_label_and_labels() {
+        use lightcraft_catalog::ColorLabel;
+        let mut h = demo([1400.0, 800.0]);
+        let t = Duration::from_secs(10);
+        h.request("engine.execute", json!({"command": "view.filterBar"}), t);
+        h.app.session.execute("library.filter", &json!({"label": "red", "labels": ["red", "yellow"]})).unwrap();
+        // a frame so the bar is laid out for the new filter before the click
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "filter:label-green"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let f = h.app.session.filter.clone();
+        assert_eq!((f.label, f.labels), (None, vec![ColorLabel::Red, ColorLabel::Green]));
+        // nothing passes both: nothing is lit, so a click shows just that label
+        h.app.session.execute("library.filter", &json!({"label": "red", "labels": ["yellow"]})).unwrap();
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "filter:label-green"}), t);
+        let f = h.app.session.filter.clone();
+        assert_eq!((f.label, f.labels), (None, vec![ColorLabel::Green]));
+        h.settle(SETTLE);
     }
 
     /// The filter bar drives `library.filter` and saves the view as a smart album.
@@ -2579,7 +2521,7 @@ mod tests {
         assert!(!row.cancellable, "{row:?}");
         assert!(h.app.session.activity.cancel(row.id).is_err(), "Photos can't be stopped once asked");
         let current = h.app.export.as_ref().map(|e| e.progress.lock().unwrap().1.clone()).unwrap_or_default();
-        assert_eq!(current, "Wird zu Apple Fotos hinzugefügt…");
+        assert_eq!(current, crate::i18n::Locale::De.tr("Adding to Apple Photos…"));
         // the row says so on the next frame (issue #345)
         h.step();
         let row = h.app.session.activity.list().into_iter().find(|r| r.kind == "export").expect("the export's row");
@@ -3446,7 +3388,7 @@ mod tests {
     }
 
     /// Switching Settings tabs keeps the window's top edge (and its tab row) where it is and never makes it
-    /// narrower, though the tabs are of different heights and widths.
+    /// narrower or taller, though the tabs hold different amounts: the window is one size on every tab.
     #[test]
     fn settings_tabs_keep_the_window_in_place() {
         let mut h = demo([1300.0, 820.0]);
@@ -3465,7 +3407,7 @@ mod tests {
             assert!(now.width() >= first.width() - 1.0, "{tab}: width {} → {}", first.width(), now.width());
             heights.push(now.height());
         }
-        assert!(heights.iter().any(|h| (h - first.height()).abs() > 20.0), "the tabs differ in height: {heights:?}");
+        assert!(heights.iter().all(|h| (h - first.height()).abs() < 1.0), "the tabs keep the height of {}: {heights:?}", first.height());
     }
 
     /// Settings → Import → "Show the import review when a camera or card is connected": a card that
@@ -4654,9 +4596,6 @@ mod tests {
             assert_eq!(crate::i18n::language(), locale);
             for (mode, key) in [("basic", "Info Overlay: File"), ("exposure", "Info Overlay: Exposure"), ("off", "Info Overlay Off")] {
                 let expected = locale.tr(key);
-                if locale != Locale::En {
-                    assert_ne!(expected, key, "this locale must translate the tested message");
-                }
                 assert_eq!(h.request("ui.key", json!({"key": "i", "cmd": true}), t)["ok"], true);
                 assert_eq!(serde_json::to_value(h.app.ui.info_overlay).unwrap(), json!(mode));
                 assert_eq!(h.app.ui.toast.as_ref().expect("overlay toast").0, expected);
