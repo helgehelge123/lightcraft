@@ -399,6 +399,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         if s.catalog.album(a).is_none_or(|a| a.folder) {
                             return Err(bad("library.source", "no such album"));
                         }
+                        // one album at a time: `to_filter` makes the album shown replace the filter's, and the
+                        // filter bar has no album chip, so a left-over one would narrow the next source unseen
+                        s.filter.album = None;
                         LibrarySource::Album(a)
                     }
                     "libraryFolder" => {
@@ -800,10 +803,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "{rating: 0..5, ids?, advance?: bool} — without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
             |s, p| {
-                let r = super::f64_req(p, "rating", "photo.rate")? as i64;
-                if !(0..=5).contains(&r) {
-                    return Err(bad("photo.rate", "rating must be 0..5"));
-                }
+                let r = super::index_req(p, "rating", "photo.rate")
+                    .ok()
+                    .filter(|r| *r <= 5)
+                    .ok_or_else(|| bad("photo.rate", "rating must be a whole number 0..5"))?;
                 cull(s, p, |s| for_targets(s, p, "Set Rating", |id| Some(Op::SetRating { id, rating: r as u8 })))
             }
         ),
@@ -1887,3 +1890,7 @@ mod rated_out_tests;
 #[cfg(test)]
 #[path = "library/tests_enable_filters.rs"]
 mod enable_filters_tests;
+
+#[cfg(test)]
+#[path = "library/tests_source_album_filter.rs"]
+mod source_album_filter_tests;
