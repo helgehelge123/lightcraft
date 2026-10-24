@@ -158,13 +158,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // colour labels
     caption(ui, "Label");
-    // several labels can be on at once (any of them matches)
-    let mut chosen: Vec<ColorLabel> = f.labels.clone();
-    if let Some(l) = f.label
-        && !chosen.contains(&l)
-    {
-        chosen.push(l);
-    }
+    // several labels can be on at once (any of them matches); lit are those `label` and `labels` both let through
+    let chosen: Vec<ColorLabel> = f.labels_shown().unwrap_or_default();
     for l in ColorLabel::ALL {
         let on = chosen.contains(&l);
         let name = format!("{l:?}").to_lowercase();
