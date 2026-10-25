@@ -139,6 +139,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("local.addRoot", "Add Folder to Local", None, ""),
     ("local.hide", "Remove from Local", None, ""),
     ("local.restoreHidden", "Show Hidden Local Locations", None, ""),
+    // {on?}: the Info panel's Target Photo / Selected Photos choice (on = Selected Photos)
+    ("view.infoSelectedPhotos", "Show Metadata for Selected Photos", None, ""),
     ("view.fullScreenPreview", "Full Screen Preview", Some("F"), "View"),
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
     ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
@@ -158,6 +160,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),
     ("panel.info", "Info", Some("I"), "Window"),
     ("panel.keywords", "Keywords", Some("K"), "Window"),
+    // the Keywords panel with the cursor in its Add keyword box
+    ("panel.addKeywords", "Add Keywords", Some("Cmd+K"), ""),
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
     ("panel.activity", "History", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
@@ -749,9 +753,22 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"infoOverlay": app.ui.info_overlay}))
         }
         "view.viewOptions" => {
-            // `info1` / `info2` set the lines for an agent; without them the window opens
+            // `info1` / `info2` set the lines, `briefly` the Info that Show Briefly When Photo Changes
+            // shows and `loupeMessages` Show message when loading or rendering photos, for an agent;
+            // without any of them the window opens
             let mut info = app.ui.settings.loupe_info;
             let mut set = false;
+            // `loupeMessages` sets Show message when loading or rendering photos
+            let messages = match p.get("loupeMessages") {
+                None => app.ui.settings.loupe_messages,
+                Some(v) => match v.as_bool() {
+                    Some(on) => {
+                        set = true;
+                        on
+                    }
+                    None => return Some(Err("`loupeMessages`: true|false".into())),
+                },
+            };
             for (key, lines) in [("info1", &mut info.info1), ("info2", &mut info.info2)] {
                 let Some(v) = p.get(key) else { continue };
                 match serde_json::from_value(v.clone()) {
@@ -762,12 +779,20 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 }
                 set = true;
             }
+            if let Some(v) = p.get("briefly") {
+                match serde_json::from_value(v.clone()) {
+                    Ok(v) => info.briefly = v,
+                    Err(_) => return Some(Err("`briefly`: off|basic|exposure (neither, Info 1 or Info 2)".into())),
+                }
+                set = true;
+            }
             if set {
                 app.ui.settings.loupe_info = info;
+                app.ui.settings.loupe_messages = messages;
             } else {
                 app.ui.dialog = Some(Dialog::ViewOptions);
             }
-            Ok(json!({"loupeInfo": app.ui.settings.loupe_info}))
+            Ok(json!({"loupeInfo": app.ui.settings.loupe_info, "loupeMessages": app.ui.settings.loupe_messages}))
         }
         "view.chooseLayoutImage" => {
             let path = match p.get("path").and_then(Value::as_str) {
@@ -1114,6 +1139,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.mask_pins = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_pins);
             Ok(json!({"maskPins": app.ui.mask_pins}))
         }
+        "view.infoSelectedPhotos" => {
+            // {on?}; no params toggles. On: the Info panel shows what the selected photos share.
+            let on = match p.get("on") {
+                None | Some(Value::Null) => !app.ui.settings.info_selected_photos,
+                Some(Value::Bool(on)) => *on,
+                Some(v) => return Some(Err(format!("view.infoSelectedPhotos: `on` must be true or false, not {v}"))),
+            };
+            app.ui.settings.info_selected_photos = on;
+            Ok(json!({"on": on}))
+        }
         "view.toolOverlay" => {
             use crate::state::ToolOverlay;
             let mode = match p.get("mode") {
@@ -1240,6 +1275,15 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "panel.keywords" => {
             panel(app, &ctx, RightPanel::Keywords, "Keywords");
+            Ok(Value::Null)
+        }
+        "panel.addKeywords" => {
+            // opens Keywording when it is folded shut; the panel stays open when pressed again
+            if app.ui.right != RightPanel::Keywords {
+                panel(app, &ctx, RightPanel::Keywords, "Keywords");
+            }
+            app.ui.folded_sections.retain(|s| s != "keywording");
+            app.ui.focus_keywords = true;
             Ok(Value::Null)
         }
         "panel.versions" => {
