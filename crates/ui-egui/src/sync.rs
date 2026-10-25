@@ -169,7 +169,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     ui.add_space(6.0);
     let Some(c) = counts.as_ref() else {
         ui.horizontal(|ui| {
-            ui.spinner();
+            crate::progress::spinner(ui, 14.0);
             match progress(app) {
                 Some(ScanStage::Listing(folders, files)) => ui.label(listing_text(folders, files)),
                 Some(ScanStage::Checking(done, total)) if total > 0 => ui.label(format!("{} {done} / {total}", crate::i18n::tr("Scanning…"))),
@@ -184,7 +184,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     }
     let choice = |ui: &mut egui::Ui, on: &mut bool, n: usize, text: String, widget: &str| {
         let r = ui.add_enabled(n > 0, egui::Checkbox::new(on, text));
-        crate::widgets::register(ui.ctx(), widget, r.rect);
+        crate::widgets::register(ui, widget, r.rect);
     };
     let count = |text: &str, n: usize| format!("{} ({n})", crate::i18n::tr(text));
     let dim = |ui: &mut egui::Ui, s: &str| ui.label(egui::RichText::new(s).color(t.text_dim));

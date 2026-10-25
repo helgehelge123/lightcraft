@@ -166,6 +166,18 @@ pub enum StartupView {
     Detail,
 }
 
+/// What the desktop app opens at launch (Settings ▸ General ▸ At launch; issue #1290). `--library`
+/// and `LIGHTCRAFT_LIBRARY` come first either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LaunchLibrary {
+    /// The library open when the app last quit (holding Alt/Option as the window appears asks once).
+    #[default]
+    Last,
+    /// A window lists the recent libraries to choose from.
+    Ask,
+}
+
 /// When grid cells show their rating / flag / edited badges.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -247,12 +259,35 @@ impl LoupeInfoField {
 }
 
 /// The three lines each mode of the info overlay shows: Info 1 ([`InfoOverlay::Basic`]) and
-/// Info 2 ([`InfoOverlay::Exposure`]).
+/// Info 2 ([`InfoOverlay::Exposure`]), and which of them Show Briefly When Photo Changes shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LoupeInfo {
     pub info1: [LoupeInfoField; 3],
     pub info2: [LoupeInfoField; 3],
+    /// Show Briefly When Photo Changes: while the info overlay is off, this Info shows for
+    /// [`BRIEF_INFO_SECS`] each time the loupe changes to another photo ([`InfoOverlay::Off`]:
+    /// neither).
+    pub briefly: InfoOverlay,
+}
+
+/// Passes after Add Keywords within which the Add keyword box takes the cursor (the panel may
+/// need a pass to open first).
+pub const FOCUS_KEYWORDS_PASSES: u64 = 2;
+
+/// How long Show Briefly When Photo Changes shows the info overlay (seconds).
+pub const BRIEF_INFO_SECS: f64 = 3.0;
+
+/// When the loupe last changed photo, for Show Briefly When Photo Changes
+/// ([`LoupeInfo::briefly`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BriefInfo {
+    /// The photo the loupe showed last.
+    pub photo: Option<lightcraft_catalog::PhotoId>,
+    /// When the loupe changed to it (seconds on egui's clock).
+    pub since: f64,
+    /// The brief info overlay shows this frame.
+    pub shown: bool,
 }
 
 impl LoupeInfo {
@@ -264,7 +299,7 @@ impl LoupeInfo {
 
 impl Default for LoupeInfo {
     fn default() -> Self {
-        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2 }
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2, briefly: InfoOverlay::Off }
     }
 }
 
@@ -407,6 +442,15 @@ pub struct AppSettings {
     /// Libraries opened recently, newest first (File ▸ Open Recent Library; at most
     /// [`RECENT_LIBRARIES`]).
     pub recent_libraries: Vec<String>,
+    /// When each recent library was last opened (path → the session clock's ISO 8601 time), for
+    /// the launch window. A separate key so files from earlier versions, and earlier versions
+    /// reading this one, keep their list (issue #1290).
+    #[serde(rename = "recentLibrariesOpened", deserialize_with = "lenient")]
+    pub recent_opened: std::collections::BTreeMap<String, String>,
+    /// Open the last library at launch, or ask (a value this version doesn't know reads as the
+    /// default).
+    #[serde(deserialize_with = "lenient")]
+    pub at_launch: LaunchLibrary,
     pub startup_view: StartupView,
     /// Ask before moving photos to Recently Deleted. Saved under a new key: earlier versions saved
     /// `confirmDelete: false` by default (#1239).
@@ -415,6 +459,11 @@ pub struct AppSettings {
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
+    /// A click on the dimmed backdrop around a dialog closes it, like Esc (off: a stray click
+    /// never throws away a dialog's choices).
+    pub close_dialogs_outside: bool,
+    /// Photos and folders dropped on the window import at once, without the import review.
+    pub import_dropped_directly: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
@@ -432,12 +481,19 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// The Info panel's metadata fields with several photos selected: true (the default) shows the
+    /// values the selected photos share and marks each field where they differ (Selected Photos),
+    /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
+    pub info_selected_photos: bool,
     /// Filmstrip: file names above the thumbnails.
     pub film_names: bool,
     /// Filmstrip: rating / flag / edited badges on the thumbnails.
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
+    /// "Rendering…" while the photo it shows is not the finished render.
+    pub loupe_messages: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -455,7 +511,7 @@ pub struct AppSettings {
     /// The Keywording box: whole keyword paths, or grouped by the keyword they are inside.
     #[serde(deserialize_with = "lenient")]
     pub keyword_chips: KeywordChips,
-    /// View ▸ Show Focus Point: draw the box the camera focused on (`view.focusPoint`).
+    /// View ▸ Focus Point: draw the box the camera focused on (`view.focusPoint`).
     pub focus_point: bool,
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
@@ -463,6 +519,22 @@ pub struct AppSettings {
     /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]
     pub loupe_info: LoupeInfo,
+    /// File ▸ Import Lightroom Catalog…: ask whether the catalog merges into the open library or
+    /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
+    #[serde(deserialize_with = "lenient")]
+    pub lightroom_import: LightroomImport,
+}
+
+/// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
+/// `"ask"` / `"alwaysMerge"`; anything else in a hand-edited `ui.json` reads as [`Self::Ask`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LightroomImport {
+    /// A window asks each time: merge into the open library, or create a new library for it.
+    #[default]
+    Ask,
+    /// Merge into the open library without asking (how imports worked before the window).
+    AlwaysMerge,
 }
 
 impl Default for AppSettings {
@@ -470,9 +542,13 @@ impl Default for AppSettings {
         AppSettings {
             library_path: String::new(),
             recent_libraries: Vec::new(),
+            recent_opened: Default::default(),
+            at_launch: LaunchLibrary::Last,
             startup_view: StartupView::Last,
             confirm_delete: true,
             ask_before_move: true,
+            close_dialogs_outside: false,
+            import_dropped_directly: false,
             gpu: true,
             preview_limit: 0,
             external_editor: String::new(),
@@ -480,9 +556,11 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            info_selected_photos: true,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            loupe_messages: true,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
@@ -493,6 +571,7 @@ impl Default for AppSettings {
             focus_point: false,
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
+            lightroom_import: LightroomImport::Ask,
         }
     }
 }
@@ -712,6 +791,10 @@ pub struct UiState {
     /// a later save succeeds).
     #[serde(skip)]
     pub unsaved_seen: bool,
+    /// Help ▸ Debug ▸ Frame Rate (`view.frameRate`): the frame-rate display
+    /// (`crate::frame_rate`). A debugging aid, never saved; `LIGHTCRAFT_FPS=1` starts with it on.
+    #[serde(skip)]
+    pub frame_rate: bool,
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
@@ -805,6 +888,10 @@ pub struct UiState {
     /// The last person page left: the People view offers a way back to it next to its title.
     #[serde(skip)]
     pub last_person: Option<String>,
+    /// Assisted Culling's burst settings last confirmed (gap in seconds, similarity), for this
+    /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
+    #[serde(skip)]
+    pub cull_burst: Option<(f32, f32)>,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -826,10 +913,12 @@ pub struct UiState {
     pub external_edits: Vec<u64>,
     #[serde(skip)]
     pub was_focused: bool,
-    /// When the watched folder was last scanned (egui time).
+    /// When the watched folder was last scanned (monotonic app time, so a hidden window keeps
+    /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
-    /// When the automatic XMP writes that failed were last tried again (egui time), and how many were waiting then.
+    /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
+    /// many were waiting then.
     #[serde(skip)]
     pub sidecar_retry_at: f64,
     #[serde(skip)]
@@ -845,6 +934,11 @@ pub struct UiState {
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
+    /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
+    /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
+    /// a request made while the panel can't show expires.
+    #[serde(skip)]
+    pub focus_keywords: Option<u64>,
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
@@ -856,7 +950,7 @@ pub struct UiState {
     #[serde(skip)]
     pub sam_downloading: bool,
     /// When to start the zoomed-in detail pass of an AI mask (app time) and which mask: set by
-    /// each click or description, so the pass runs once the clicking stops.
+    /// each click or description, so the pass runs once the clicking stops (monotonic app time).
     #[serde(skip)]
     pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
@@ -967,6 +1061,9 @@ pub struct UiState {
     pub slideshow: Option<Box<crate::panels::slideshow::Run>>,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
+    /// When the loupe last changed photo (View Options' Show Briefly When Photo Changes).
+    #[serde(skip)]
+    pub brief_info: BriefInfo,
     /// The loupe's layout image overlay (View ▸ Loupe Overlay).
     pub layout_image: LayoutImage,
     /// Navigator mini map in the loupe while zoomed in.
@@ -1174,10 +1271,13 @@ pub enum Dialog {
     /// Help ▸ What's New.
     WhatsNew,
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
-    /// of each burst.
+    /// of each burst; shots at most `burst_gap` seconds apart and at least `similarity` alike are
+    /// a burst.
     Cull {
         reject_below: f32,
         pick_best: bool,
+        burst_gap: f32,
+        similarity: f32,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -1257,6 +1357,29 @@ pub enum Dialog {
     LightroomCatalog {
         folder: String,
         catalog: Option<String>,
+    },
+    /// File ▸ Import Lightroom Catalog…: where the catalog at `catalog` goes (issue #2672, see
+    /// [`crate::lightroom_destination`]). Merge into the open library `library` (`photos` in it), or
+    /// (`new_library`) create the library `name` in the folder `location`, switch to it and import
+    /// there. `dont_ask`: merge from now on without asking. `generation`: the library the window
+    /// was opened for (`Session::library_generation`): another one opened meanwhile isn't merged into.
+    LightroomDestination {
+        /// The `.lrcat` file.
+        catalog: String,
+        /// The open library's name (its folder's name).
+        library: String,
+        /// The photos in the open library.
+        photos: usize,
+        /// "Create a new library" is chosen (else "Merge into the open library").
+        new_library: bool,
+        /// The new library's name (prefilled from the catalog's file name).
+        name: String,
+        /// The folder the new library goes in (prefilled with the open library's parent folder).
+        location: String,
+        /// "Don't ask again (always merge into the open library)".
+        dont_ask: bool,
+        /// `Session::library_generation` when the window opened.
+        generation: u64,
     },
     /// Save the selected mask's sliders as a mask effect preset: which sliders (`FIELDS` names,
     /// the colour as `color_sat`), whether it carries Amount and the brush settings.
@@ -1364,6 +1487,7 @@ impl Default for UiState {
             language: crate::i18n::default_language(),
             preview_build_seen: None,
             unsaved_seen: false,
+            frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,
             view: ViewMode::Detail,
             left_panel: false,
@@ -1410,6 +1534,7 @@ impl Default for UiState {
             person_page: None,
             person_from: None,
             last_person: None,
+            cull_burst: None,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
@@ -1425,6 +1550,7 @@ impl Default for UiState {
             known_cards: None,
             search: String::new(),
             focus_search: false,
+            focus_keywords: None,
             renaming_mask: None,
             describe: None,
             detail_due: None,
@@ -1472,6 +1598,7 @@ impl Default for UiState {
             keyword_list_selected: None,
             dragging_keyword: None,
             info_overlay: InfoOverlay::Off,
+            brief_info: BriefInfo::default(),
             layout_image: LayoutImage::default(),
             navigator: true,
             settings: AppSettings::default(),
@@ -1619,16 +1746,36 @@ mod loupe_info_tests {
     fn view_options_lines_are_saved_with_the_settings() {
         let mut settings = AppSettings::default();
         settings.loupe_info.info2 = [LoupeInfoField::Lens, LoupeInfoField::None, LoupeInfoField::FileName];
+        settings.loupe_info.briefly = InfoOverlay::Exposure;
         let saved = serde_json::to_value(&settings).unwrap();
         assert_eq!(saved["loupeInfo"]["info2"], serde_json::json!(["lens", "none", "fileName"]));
+        assert_eq!(saved["loupeInfo"]["briefly"], "exposure");
         let read: AppSettings = serde_json::from_value(saved).unwrap();
         assert_eq!(read.loupe_info, settings.loupe_info);
 
         let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
         assert_eq!(old.loupe_info, LoupeInfo::default());
+        // lines saved before Show Briefly When Photo Changes existed are kept, with it off
+        let lines: AppSettings = serde_json::from_value(serde_json::json!({"loupeInfo": {"info2": ["lens", "none", "fileName"]}})).unwrap();
+        assert_eq!(lines.loupe_info.info2, settings.loupe_info.info2);
+        assert_eq!(lines.loupe_info.briefly, InfoOverlay::Off);
         let newer: AppSettings =
             serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
         assert_eq!(newer.loupe_info, LoupeInfo::default());
         assert!(!newer.film_names, "the rest of the settings are still read");
+    }
+
+    /// Show message when loading or rendering photos is on until it is turned off, and is saved
+    /// with the app's settings.
+    #[test]
+    fn the_loading_message_choice_is_saved_with_the_settings() {
+        assert!(AppSettings::default().loupe_messages);
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert!(old.loupe_messages, "a settings file from before the choice existed keeps the message");
+        let settings = AppSettings { loupe_messages: false, ..AppSettings::default() };
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["loupeMessages"], false);
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(!read.loupe_messages);
     }
 }

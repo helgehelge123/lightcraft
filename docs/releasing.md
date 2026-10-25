@@ -67,7 +67,7 @@ Chinese face and packages Noto Sans CJK SC as a separate asset.
 
 Local macOS, Linux and Windows packaging scripts automatically use the sibling `../craft-fonts`
 checkout. If it is absent, they clone it at revision
-`1466a883ae5ac0a7d76cfe7f9d56fe0240acb255` (keep the pins in `packaging/fonts.sh` and
+`b076417b5880bd4154bd22f00695b1d28c6bea83` (keep the pins in `packaging/fonts.sh` and
 `packaging/windows/fonts.ps1` in sync with the release workflow). Existing checkouts are left untouched.
 Set `CRAFT_FONTS_DIR` to use another
 checkout; relative paths resolve from the workspace root. The script requires the Chinese and Japanese
