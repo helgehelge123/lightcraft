@@ -354,7 +354,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if matches!(c.op, lightcraft_develop::MaskOp::Intersect) {
                     // the drawn ∩ has no text: the row still names its mode to screen readers
                     let spoken = format!("{}: {text}", crate::i18n::tr("Intersect"));
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken.clone()));
                 }
                 register(ui, format!("component:{i}"), resp.rect);
                 if resp.double_clicked() {
