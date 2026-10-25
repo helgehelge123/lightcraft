@@ -110,7 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         for (k, (g, photos)) in shown.iter().enumerate() {
             // the title: a drop there puts the photos last; dragged, it takes the burst along
             let (title, resp) = ui.allocate_exact_size(vec2(width, TITLE_H), Sense::click_and_drag());
-            register(ui.ctx(), format!("burst:{g}"), title);
+            register(ui, format!("burst:{g}"), title);
             let p = ui.painter();
             let name = format!("{} {}", crate::i18n::tr("Burst"), k + 1);
             p.text(pos2(title.left() + INSET, title.center().y), Align2::LEFT_CENTER, name, t.semibold(12.5), t.text);
@@ -137,7 +137,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for (i, id) in photos.iter().enumerate() {
                 let r = cell_at(i);
                 if let Some(badge) = photo_cell(app, ui, *id, r) {
-                    register(ui.ctx(), format!("burstPick:{g}"), badge);
+                    register(ui, format!("burstPick:{g}"), badge);
                 }
                 // a drop on a photo's left half goes before it, on its right half after it
                 if let Some(p) = pointer
@@ -166,7 +166,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for (key, label, tgt) in [("burst:new", "New burst", Target::New), ("burst:none", "Not in a burst", Target::Nowhere)] {
                 let (row, _) = ui.allocate_exact_size(vec2(width, 40.0), Sense::hover());
                 let zone = row.shrink2(vec2(INSET, 4.0));
-                register(ui.ctx(), key, zone);
+                register(ui, key, zone);
                 let over = dragged.is_some() && pointer.is_some_and(|p| zone.contains(p));
                 let stroke = if over { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.divider) };
                 ui.painter().rect_stroke(zone, 6.0, stroke, StrokeKind::Inside);
@@ -191,8 +191,8 @@ fn photo_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect) 
     let t = Tokens::get(ui.ctx());
     let photo = app.session.catalog.photo(id).cloned()?;
     let pick = photo.analysis.is_some_and(|a| a.best);
-    let resp = ui.interact(r, egui::Id::new(("burst-photo", id.0)), Sense::click_and_drag());
-    register(ui.ctx(), format!("burstPhoto:{}", id.0), r);
+    let resp = ui.interact(r, egui::Id::unique(("burst-photo", id.0)), Sense::click_and_drag());
+    register(ui, format!("burstPhoto:{}", id.0), r);
     // Any thumbnail will do at this size: one is asked for only when there is none, so the grid's
     // larger ones are never asked again at this size (and back) every frame. Above the grid's own
     // priorities: a member hidden in a collapsed stack isn't in the grid, which evicts the rest.

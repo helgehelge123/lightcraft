@@ -92,7 +92,7 @@ fn drag(h: &mut Headless, from: Pos2, to: Pos2) {
 }
 
 fn hint(h: &Headless) -> Option<String> {
-    h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::new("drag-photos-hint"))).map(|(_, text)| text)
+    h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint"))).map(|(_, text)| text)
 }
 
 fn best(h: &Headless, id: PhotoId) -> bool {
