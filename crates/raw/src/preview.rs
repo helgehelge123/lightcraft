@@ -103,8 +103,6 @@ fn jpeg_frame(b: &[u8]) -> Option<(u32, u32, u8)> {
     let be16 = |k: usize| Some(u32::from(u16::from_be_bytes([at(k)?, at(k + 1)?])));
     Some((be16(7)?, be16(5)?, at(9)?))
 }
-
-/// Whether `b` is a JPEG XL file: a bare codestream or the ISO-BMFF container's signature box.
 fn is_jxl(b: &[u8]) -> bool {
     b.starts_with(&[0xff, 0x0a]) || b.starts_with(&[0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a])
 }
@@ -128,28 +126,25 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>)
     }
     if matches!(ifd.u16(t::COMPRESSION), Some(6) | Some(7) | Some(34892))
         && let Ok(info) = ifd.image()
+        && let Some(chunk) = info.single_chunk(data.len() as u64)
+        && let Some(s) = chunk_bytes(data, &chunk)
     {
-        let chunks = info.chunks(data.len() as u64);
-        if chunks.len() == 1
-            && let Some(s) = chunk_bytes(data, &chunks[0])
-        {
-            out.push(s);
-        }
+        out.push(s);
     }
     // a rendered (RGB or grey, never CFA/LinearRaw/mask) JPEG XL preview in one chunk
     if ifd.u16(t::COMPRESSION) == Some(t::compression::JPEG_XL)
         && matches!(ifd.u16(t::PHOTOMETRIC), Some(t::photometric::BLACK_IS_ZERO | t::photometric::RGB))
         && let Ok(info) = ifd.image()
-        && let [chunk] = info.chunks(data.len() as u64).as_slice()
-        && let Some(s) = chunk_bytes(data, chunk)
+        && let Some(chunk) = info.single_chunk(data.len() as u64)
+        && let Some(s) = chunk_bytes(data, &chunk)
         && is_jxl(s)
     {
         out.push(s);
     }
 }
 
-/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file — both decode with
-/// `lightcraft_codecs::decode`.
+/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file, or for a Hasselblad 3FR / FFF, which
+/// has no JPEG, its uncompressed RGB preview wrapped as a baseline TIFF — all decode with `lightcraft_codecs::decode`.
 pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     preview_covering(bytes, None)
 }
@@ -220,6 +215,8 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
     best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
+        // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
+        .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::vendor::hasselblad::rgb_preview(&tiff, bytes)).flatten())
 }
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,
@@ -395,8 +392,14 @@ fn cr3_preview(bytes: &[u8]) -> Option<&[u8]> {
 /// Canon CR3 (ISO base media file): the `PRVW` box (Laurent Clévy's CR3 notes; layout confirmed on a CC0
 /// sample) is `u32 size, "PRVW", u32 0, u16 ?, u16 width, u16 height, u16 ?, u32 jpeg length, JPEG`; the smaller
 /// `THMB` box has the same shape. Returns the larger valid one.
+/// Marker-walk budget of the CR3 fallback: candidates can overlap (each claiming the rest of the file) and
+/// [`is_dct_jpeg`] walks each marker by marker, so walking every candidate would be quadratic in file size.
+/// The `THMB`/`PRVW` previews this finds are far below the cap together; once it is spent the scan stops.
+const CR3_MAX_WALK: usize = 8 << 20;
+
 fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
     let mut best: Option<&[u8]> = None;
+    let mut walked = 0usize;
     for tag in [b"PRVW", b"THMB"] {
         let mut from = 0;
         while let Some(i) = bytes.get(from..).and_then(|s| s.windows(4).position(|w| w == tag)).map(|p| p + from) {
@@ -409,6 +412,11 @@ fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
                 continue;
             }
             let jpeg = &bytes[j..j + len];
+            // One that doesn't fit the budget left is skipped; a smaller one later may still fit.
+            if walked + jpeg.len() > CR3_MAX_WALK {
+                continue;
+            }
+            walked += jpeg.len();
             if is_dct_jpeg(jpeg) {
                 if best.is_none_or(|b| b.len() < jpeg.len()) {
                     best = Some(jpeg);
@@ -436,6 +444,52 @@ mod tests {
         j.extend(std::iter::repeat_n(0x55u8, n));
         j.extend_from_slice(&[0xff, 0xd9]);
         j
+    }
+
+    /// Preview extraction only serves single-chunk JPEG-compressed IFDs and asks the `single_chunk` first:
+    /// a TIFF whose strip array declares 100 000 one-row strips and no StripByteCounts must not build their
+    /// descriptor vector, and of course finds no preview in it.
+    #[test]
+    fn a_multi_strip_jpeg_ifd_costs_no_descriptor_vector() {
+        let mut ifd = IfdBuilder::new();
+        ifd.set(t::COMPRESSION, Value::Short(vec![7]));
+        ifd.set(t::IMAGE_WIDTH, Value::Long(vec![16]));
+        ifd.set(t::IMAGE_LENGTH, Value::Long(vec![100_000]));
+        ifd.set(t::ROWS_PER_STRIP, Value::Short(vec![1]));
+        ifd.set(t::STRIP_OFFSETS, Value::Byte((0..100_000).map(|i| (i % 255 + 1) as u8).collect()));
+        let file = TiffWriter::default().write(&[ifd]).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(embedded_preview(&file)));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)), Ok(None));
+    }
+
+    /// CR3 candidates claim overlapping extents: each block's first bytes double as a 40-byte jump marker so
+    /// a walk jogs past the next header and reaches the end of the file, making every one of the 9000
+    /// candidates walk its whole suffix before the marker-walk budget — quadratic without it. Nothing here
+    /// is a JPEG (no frame header), so the answer is `None` either way.
+    #[test]
+    fn cr3_preview_boxes_stop_walking_when_the_budget_is_spent() {
+        // one 256-byte block per candidate, all marker-aligned so walks chain through later blocks:
+        // 0..4, size (itself a jump marker of 40 bytes); 4..8, "PRVW"; 20..24, the claimed length
+        // (to the file end); 24..28, an SOI plus a marker jumping to the fill at 40; 64..256, a fill of
+        // 4-byte markers (`ff 01 00 02`).
+        let blocks = 9000usize;
+        let total = blocks * 256;
+        let mut f = Vec::with_capacity(total);
+        for k in 0..blocks {
+            let base = k * 256;
+            f.extend_from_slice(&[0xff, 0x01, 0x00, 0x26, b'P', b'R', b'V', b'W', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            f.extend_from_slice(&u32::try_from(total - base - 24).unwrap().to_be_bytes());
+            f.extend_from_slice(&[0xff, 0xd8, 0x00, 0x24, 0xff, 0x01, 0x00, 0x26, 0, 0, 0, 0, 0, 0, 0, 0]);
+            f.resize(base + 64, 0); // 40..64 filler: walks jump over it, so its bytes are free
+            for _ in 0..48 {
+                f.extend_from_slice(&[0xff, 0x01, 0x00, 0x02]);
+            }
+        }
+        assert_eq!(f.len(), total);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(cr3_preview_boxes(&f).map(|s| s.len())));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)), Ok(None), "no PRVW candidate is a JPEG");
     }
 
     /// A minimal RAF: the fixed header (JPEG offset/length at 84/88), the JPEG, then a raw tail the
@@ -711,7 +765,8 @@ mod tests {
                 f.extend_from_slice(part);
                 f.extend_from_slice(&[0u8; 7]);
             }
-            assert!(crate::probe(&f).is_some_and(|p| !p.is_supported()), "{head:?}");
+            // MRW decodes; its preview is still found by the scan
+            assert!(crate::probe(&f).is_some_and(|p| !p.is_supported() || p == crate::RawFormat::Mrw), "{head:?}");
             assert_eq!(embedded_preview(&f).as_deref(), Some(&big[..]), "{head:?}");
             for n in (0..f.len()).step_by(11) {
                 let _ = embedded_preview(&f[..n]);

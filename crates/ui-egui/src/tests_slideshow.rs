@@ -16,9 +16,13 @@ const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn grid() -> Headless {
+    grid_sized([1000.0, 700.0])
+}
+
+fn grid_sized(size: [f32; 2]) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
-    let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+    let mut h = Headless::new(app, size, 1.0);
     h.step();
     h
 }
@@ -45,6 +49,10 @@ fn has_slide(h: &Headless, item: impl Into<Item>) -> bool {
 /// The photo up now (none while a title screen is).
 fn photo_up(h: &Headless) -> PhotoId {
     play(h).current_photo().expect("a photo is up")
+}
+
+fn rect_json(r: egui::Rect) -> serde_json::Value {
+    json!([r.left(), r.top(), r.width(), r.height()])
 }
 
 fn slides_held(h: &Headless) -> usize {
@@ -75,6 +83,17 @@ fn slideshow_advances_pauses_and_ends() {
     assert!(!h.app.ui.fullscreen && h.app.ui.slideshow.is_none());
     assert_eq!(slides_held(&h), 0, "slide textures freed");
     h.settle(SETTLE);
+}
+
+#[test]
+fn turning_off_the_full_screen_preview_frees_the_slides() {
+    let mut h = grid();
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "preparePreviews": false}));
+    assert!(h.step_until(SETTLE, |h| slides_held(h) > 0), "a slide is rendered");
+    let r = run(&mut h, "view.fullScreenPreview", json!({}));
+    assert_eq!(r["fullscreen"], false);
+    assert!(!h.app.ui.fullscreen && h.app.ui.slideshow.is_none(), "the toggle ends the slideshow");
+    assert_eq!(slides_held(&h), 0, "slide textures freed");
 }
 
 #[test]
@@ -147,6 +166,46 @@ fn arrows_cut_and_repeat_off_ends_after_the_last_slide() {
     assert_eq!(play(&h).position(), (photos.len(), photos.len()));
     run(&mut h, "slideshow.next", json!({}));
     assert!(h.app.ui.slideshow.is_none() && !h.app.ui.fullscreen, "no repeat: past the last one it ends");
+    h.settle(SETTLE);
+}
+
+#[test]
+fn a_manual_slideshow_waits_for_the_arrow_keys() {
+    let mut h = grid();
+    let photos = h.app.session.visible_cloned();
+    // the library setting, as the Settings checkbox sets it
+    run(&mut h, "slideshow.playback", json!({"manual": true}));
+    let r = run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0}));
+    assert_eq!(r["settings"]["manual"], true, "{r}");
+    // once the first two slides are rendered, and far longer than the slide duration: the first
+    // photo stays up
+    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    for _ in 0..120 {
+        h.step();
+    }
+    assert_eq!(photo_up(&h), photos[0], "nothing advances on its own");
+    let r = h.request("ui.key", json!({"key": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(photo_up(&h), photos[1]);
+    assert_eq!(h.app.session.active(), Some(photos[1]), "the selection follows");
+    let s = run(&mut h, "slideshow.togglePause", json!({}));
+    assert_eq!((s["manual"].clone(), s["remaining"].clone()), (json!(true), json!(null)), "{s}");
+    run(&mut h, "slideshow.end", json!({}));
+    assert!(h.app.ui.slideshow.is_none());
+    // off again: it advances by itself
+    run(&mut h, "slideshow.playback", json!({"manual": false}));
+    run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0}));
+    let up = photo_up(&h);
+    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.current_photo() != Some(up))));
+    run(&mut h, "slideshow.end", json!({}));
+    // the Settings checkbox turns it on
+    run(&mut h, "view.slideshowOptions", json!({}));
+    h.step();
+    reveal(&mut h, "check:settings.slideshowManual");
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowManual"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.slideshow.manual, "the checkbox goes through slideshow.playback");
     h.settle(SETTLE);
 }
 
@@ -233,13 +292,43 @@ fn playback_settings_drive_the_slideshow_and_bad_ones_are_refused() {
     run(&mut h, "view.slideshowOptions", json!({}));
     h.step();
     assert!(h.app.widgets.iter().any(|(w, _)| w == "check:settings.slideshowRandom"));
+    // The preview render is a layout input too: wait for the selected photo's real slide before
+    // scrolling and clicking, so its completion cannot move the checkbox between those steps.
+    let preview = h.app.session.active().expect("the demo library has a selected photo");
+    assert!(
+        h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == preview)),
+        "the real preview is rendered"
+    );
     // (below the Templates at the top of the tab)
-    reveal(&mut h, "check:settings.slideshowRandom");
+    let validated = reveal(&mut h, "check:settings.slideshowRandom");
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowRandom"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.step();
+    assert_eq!(r["result"]["rect"], rect_json(validated), "the click used the rect reveal validated");
     assert!(h.app.session.slideshow.random_order, "the checkbox goes through slideshow.playback");
     h.settle(SETTLE);
+}
+
+#[test]
+fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
+    // A compact window leaves the lower controls of the Slideshow settings page outside the
+    // scrolled page room, but they are still laid out and registered.
+    let mut h = grid_sized([1000.0, 560.0]);
+    run(&mut h, "view.slideshowOptions", json!({}));
+    assert!(h.settle(SETTLE), "the settings page settles");
+    let target = latest_widget_rect(&h, "check:settings.slideshowRandom").expect("the checkbox is registered");
+    let hit = crate::control::widget_hit(&h.app, "check:settings.slideshowRandom").expect("the checkbox has an egui hit owner");
+    assert!(
+        !crate::control::widget_target_visible(&h.view.ctx, Some(hit), target.center()),
+        "the random-order checkbox is clipped out of the page: {target:?}"
+    );
+    // Its centre is clipped out, so egui would not hit it. Clicking by id must fail closed rather
+    // than pressing whatever is at those coordinates.
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowRandom"}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(error.contains("check:settings.slideshowRandom"), "{r}");
+    assert!(error.contains("nothing was retargeted"), "{r}");
+    assert!(!h.app.session.slideshow.random_order, "the clipped control was not clicked");
 }
 
 #[test]
@@ -258,26 +347,85 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     h.settle(SETTLE);
 }
 
-/// Scroll the Settings ▸ Slideshow column until widget `id` is in view (near its top): the
-/// sections are taller than the dialog.
-fn reveal(h: &mut Headless, id: &str) {
-    let find = |h: &Headless, w: &str| h.app.widgets.iter().find(|(i, _)| i == w).map(|(_, r)| *r);
+/// The latest registry entry for `id`, as [`crate::control::widget_rect`] looks it up (the last
+/// registered rect wins).
+fn latest_widget_rect(h: &Headless, id: &str) -> Option<egui::Rect> {
+    h.app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| *r)
+}
+
+fn in_page_room(room: egui::Rect, widget: egui::Rect) -> bool {
+    widget.center().y >= room.top() + 10.0 && widget.center().y <= room.bottom() - 10.0
+}
+
+/// egui 0.37 smooths wheel deltas over several frames (and ends the action after a short idle).
+/// Do not measure or click until the Settings page has really stopped scrolling.
+fn wait_for_scroll_settled(h: &mut Headless) {
+    for _ in 0..600 {
+        if !h.view.ctx.input(|i| i.is_scrolling()) {
+            return;
+        }
+        h.step();
+    }
+    panic!("the Settings page kept scrolling");
+}
+
+/// The widget's latest rect once the whole rect (not just its centre) has stayed unchanged for
+/// three completed passes. A pinned widget is allowed above the page; a page widget must still be
+/// inside the page's room.
+fn settled_revealed(h: &mut Headless, id: &str, pinned: bool) -> egui::Rect {
+    let mut last = None;
+    let mut stable = 0;
+    for _ in 0..240 {
+        h.step();
+        let Some(now) = latest_widget_rect(h, id) else {
+            last = None;
+            stable = 0;
+            continue;
+        };
+        let room = latest_widget_rect(h, "settings:pageRoom").expect("the Slideshow settings are open");
+        let in_place = if pinned { now.bottom() <= room.top() } else { in_page_room(room, now) };
+        if !in_place || h.view.ctx.input(|i| i.is_scrolling()) {
+            last = Some(now);
+            stable = 1;
+            continue;
+        }
+        if last == Some(now) {
+            stable += 1;
+            if stable >= 3 {
+                return now;
+            }
+        } else {
+            stable = 1;
+        }
+        last = Some(now);
+    }
+    panic!("{id} never settled in view");
+}
+
+/// Scroll the Settings ▸ Slideshow page until widget `id` is in view (in the middle of the room
+/// for the page): the sections are taller than the dialog. (The slide preview and its choice are pinned
+/// above the page and are in view already.) Returns the settled rect that the click will use.
+fn reveal(h: &mut Headless, id: &str) -> egui::Rect {
+    // (the preview and its Photo / Intro / Ending choice are pinned above the page: always in
+    // view, never scrolled to)
+    let pinned = id == "slideshow:preview" || id.starts_with("button:settingsSlideshowPreviewShows-");
     for _ in 0..40 {
         h.step();
-        let col = find(h, "slideshow:preview").expect("the Slideshow settings are open");
-        let dy = match find(h, id) {
-            Some(w) if w.center().y >= col.top() + 10.0 && w.center().y <= col.top() + 340.0 => return,
-            Some(w) => (col.top() + 80.0 - w.center().y).clamp(-500.0, 500.0),
+        wait_for_scroll_settled(h);
+        let room = latest_widget_rect(h, "settings:pageRoom").expect("the Slideshow settings are open");
+        let in_view = latest_widget_rect(h, id).is_some_and(|w| if pinned { w.bottom() <= room.top() } else { in_page_room(room, w) });
+        if in_view {
+            return settled_revealed(h, id, pinned);
+        }
+        let dy = match latest_widget_rect(h, id) {
+            Some(w) => (room.center().y - w.center().y).clamp(-500.0, 500.0),
             None => -300.0,
         };
-        // (the pointer over the settings column, left of the preview)
-        let r = h.request("ui.hoverWidget", json!({"id": "slideshow:preview", "fx": -1.0, "fy": 0.5}), T);
+        let r = h.request("ui.hoverWidget", json!({"id": "settings:pageRoom"}), T);
         assert_eq!(r["ok"], true, "{r}");
         let r = h.request("ui.scroll", json!({"dy": dy}), T);
         assert_eq!(r["ok"], true, "{r}");
-        for _ in 0..8 {
-            h.step();
-        }
+        wait_for_scroll_settled(h);
     }
     panic!("{id} never came into view");
 }
@@ -373,9 +521,19 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     run(&mut h, "slideshow.layout", json!({"margins": 0.2, "backdropColor": "#00ff00"}));
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
     h.step();
-    let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
-    let img = h.paint();
-    let c = painted(&img, (rect.left() + 3.0) as usize, (rect.center().y) as usize);
+    // (the preview is pinned above the page: in view already)
+    reveal(&mut h, "slideshow:preview");
+    // (painted once the new preview is on screen: one frame isn't always enough on a loaded machine)
+    let t0 = std::time::Instant::now();
+    let c = loop {
+        let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
+        let img = h.paint();
+        let c = painted(&img, (rect.left() + 3.0) as usize, (rect.center().y) as usize);
+        if (c[1] > 200 && c[0] < 60) || t0.elapsed() > T {
+            break c;
+        }
+        h.step();
+    };
     assert!(c[1] > 200 && c[0] < 60, "the green backdrop in the preview margin: {c:?}");
     h.settle(SETTLE);
 }
@@ -592,6 +750,7 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     assert_eq!(crate::panels::slide_titles::preview_shows(&h.view.ctx), Some(lightcraft_engine::slideshow::Title::Intro));
     run(&mut h, "slideshow.titles", json!({"intro": {"color": "#ff8000", "content": "none"}}));
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == PhotoId(0))));
+    reveal(&mut h, "slideshow:preview");
     assert!(h.step_until(SETTLE, |h| {
         let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
         let img = h.paint();
@@ -606,6 +765,7 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     h.step();
     assert!(has(&h, "field:slideshowIntroText"));
     // back to the photo's slide
+    reveal(&mut h, "button:settingsSlideshowPreviewShows-0");
     let r = h.request("ui.clickWidget", json!({"id": "button:settingsSlideshowPreviewShows-0"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
@@ -643,6 +803,8 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     let before = SlideLook::of(&h.app.session);
     let r = h.request("ui.hoverWidget", json!({"id": "template:builtin:gallery-wall"}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // (the pointer is over the row one frame after it moved there, and the page has settled the next)
+    h.step();
     h.step();
     assert_eq!(crate::panels::slide_templates::hovered(&h.view.ctx).as_deref(), Some("builtin:gallery-wall"));
     let grey = |h: &Headless| {
@@ -655,16 +817,19 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(SlideLook::of(&h.app.session), before, "hovering changes nothing");
     assert!(h.app.session.slide_templates_previous.is_none());
     // a click applies it
+    reveal(&mut h, "template:builtin:gallery-wall");
     let r = h.request("ui.clickWidget", json!({"id": "template:builtin:gallery-wall"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(h.app.session.slide_overlays.rating_stars.enabled && h.app.session.slide_layout.stroke_border);
     assert!(has(&h, "template:previous"), "Previous settings appear");
     // save as a template of our own
+    reveal(&mut h, "field:slideshowTemplateName");
     let r = h.request("ui.clickWidget", json!({"id": "field:slideshowTemplateName"}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Holiday / 2026"}), T);
     assert_eq!(r["ok"], true, "{r}");
+    reveal(&mut h, "button:slideshowTemplateSave");
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateSave"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -673,6 +838,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert!(has(&h, "template:user:Holiday _ 2026"));
     // update it from its menu with changed settings
     run(&mut h, "slideshow.layout", json!({"backdropColor": "#123456"}));
+    reveal(&mut h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -685,6 +851,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert_eq!(h.app.session.slide_template("user:Holiday _ 2026").unwrap().look.layout.backdrop_color, [0x12, 0x34, 0x56]);
     // rename it in place
+    reveal(&mut h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -703,6 +870,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert!(has(&h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
     // delete it (after confirming)
+    reveal(&mut h, "template:user:Summer");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Summer", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -716,10 +884,33 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert!(!dir.join("Summer.json").exists());
     // back to the settings before Gallery Wall
+    reveal(&mut h, "template:previous");
     let r = h.request("ui.clickWidget", json!({"id": "template:previous"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Hovering a template in the Template Browser previews it in the slide preview, so the preview
+/// must be in view while the templates (further down the page) are: it is pinned above the page,
+/// under the tab bar, and does not scroll away with it.
+#[test]
+fn the_slide_preview_stays_in_view_while_the_templates_are_browsed() {
+    // (900 x 560 is the least the desktop app's window is)
+    for size in [[1000.0, 700.0], [900.0, 560.0]] {
+        let mut h = grid_sized(size);
+        run(&mut h, "view.slideshowOptions", json!({}));
+        h.step();
+        let find = |h: &Headless, w: &str| h.app.widgets.iter().find(|(i, _)| i == w).map(|(_, r)| *r);
+        let tabs = find(&h, "button:settingsTab-slideshow").expect("the tab bar");
+        // down to the last section of the page: the templates are far above the preview's old place
+        reveal(&mut h, "button:slideshowExportPdf");
+        let preview = find(&h, "slideshow:preview").expect("the preview is still drawn");
+        let room = find(&h, "settings:pageRoom").unwrap();
+        assert!(preview.height() > 40.0, "{size:?}: {preview:?}");
+        assert!(preview.top() >= tabs.bottom(), "{size:?}: under the tab bar, not scrolled up behind it: {preview:?} {tabs:?}");
+        assert!(preview.bottom() <= room.top() + 1.0, "{size:?}: above the page, not in it: {preview:?} {room:?}");
+    }
 }

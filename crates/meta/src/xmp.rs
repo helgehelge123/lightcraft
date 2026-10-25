@@ -69,7 +69,8 @@ pub struct XmpData {
     /// The opaque `lc:settings` JSON string, if present.
     pub lc_settings: Option<String>,
     /// Every property found, keyed `prefix:name` (struct fields as `prefix:name/prefix:field`); arrays keep
-    /// item order, language alternatives put `x-default` first.
+    /// item order, language alternatives put `x-default` first. Foreign namespaces that reuse a recognized
+    /// prefix use `Q{hex-encoded namespace URI}local` instead, so they cannot impersonate known properties.
     pub properties: BTreeMap<String, Vec<String>>,
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
@@ -150,26 +151,51 @@ impl Node {
 
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 200_000;
+// Expanding a long namespace URI on many short names must not amplify a small packet without bound.
+pub(crate) const MAX_OPAQUE_NAME_BYTES: usize = 8 * 1024 * 1024;
 
-/// `prefix:local` with the prefix canonicalised by namespace URI (see [`NAMESPACES`]).
-pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>]) -> String {
-    canonical(qname, scopes)
+/// Most text a converter's flattened property keys may add up to. Keys repeat their whole ancestor
+/// path (`parent/field`), so a document with a long nested name and a wide child fan-out otherwise
+/// retains its prefix once per property: node limits alone cannot bound that duplication.
+const MAX_KEY_BYTES: usize = 1 << 20;
+
+/// Names canonicalised by namespace URI (see [`NAMESPACES`]); conflicting foreign prefixes are opaque.
+pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
+    canonical(qname, scopes, opaque_budget)
 }
 
-fn canonical(qname: &str, scopes: &[Vec<(String, String)>]) -> String {
+fn canonical(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
     let (prefix, local) = qname.split_once(':').unwrap_or(("", qname));
     if prefix == "xml" || prefix == "xmlns" {
-        return qname.to_string();
+        return Ok(qname.to_string());
     }
     let uri = scopes.iter().rev().flat_map(|s| s.iter().rev()).find(|(p, _)| p == prefix).map(|(_, u)| u.as_str());
-    match uri {
+    Ok(match uri {
         Some(u) => match NAMESPACES.iter().find(|(_, nu)| *nu == u) {
             Some((p, _)) => format!("{p}:{local}"),
+            None if NAMESPACES.iter().any(|(p, _)| *p == prefix) => {
+                // A foreign `lc:settings` must never match our `lc:*` ownership rule (nor may a
+                // foreign `xmp:Rating` become a rating). Braces cannot occur in an XML QName;
+                // hex keeps URI slashes out of the flattened property's `/` path separators.
+                let size =
+                    u.len().checked_mul(2).and_then(|n| n.checked_add(3)).and_then(|n| n.checked_add(local.len())).ok_or(XmpError::TooComplex)?;
+                *opaque_budget = opaque_budget.checked_sub(size).ok_or(XmpError::TooComplex)?;
+                let mut key = String::with_capacity(size);
+                key.push_str("Q{");
+                for byte in u.bytes() {
+                    for nibble in [byte >> 4, byte & 15] {
+                        key.push(char::from(if nibble < 10 { b'0' + nibble } else { b'a' + (nibble - 10) }));
+                    }
+                }
+                key.push('}');
+                key.push_str(local);
+                key
+            }
             None if prefix.is_empty() => local.to_string(),
             None => qname.to_string(),
         },
         None => qname.to_string(),
-    }
+    })
 }
 
 fn entity(name: &str) -> Option<char> {
@@ -185,13 +211,24 @@ fn entity(name: &str) -> Option<char> {
                 Some(h) => u32::from_str_radix(h, 16).ok()?,
                 None => n.parse().ok()?,
             };
-            char::from_u32(v)?
+            char::from_u32(v).filter(|&c| is_xml_char(c))?
         }
     })
 }
 
+/// The XML 1.0 `Char` production (the surrogate range can't occur in a `char`).
+fn is_xml_char(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r') || (c >= '\u{20}' && c != '\u{FFFE}' && c != '\u{FFFF}')
+}
+
+/// Drop the characters XML 1.0 forbids, which strict parsers (Adobe XMP Toolkit, expat, libxml2) reject the
+/// whole document for.
+fn xml_safe(s: &str) -> String {
+    s.chars().filter(|&c| is_xml_char(c)).collect()
+}
+
 /// Unescape attribute values (predefined + numeric references; unknown references kept verbatim).
-fn unescape_attr(s: &str) -> String {
+pub(crate) fn unescape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
@@ -218,6 +255,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
     let mut stack: Vec<Node> = vec![Node { name: "#root".into(), ..Default::default() }];
     let mut scopes: Vec<Vec<(String, String)>> = vec![vec![("xml".into(), "http://www.w3.org/XML/1998/namespace".into())]];
     let mut count = 0usize;
+    let mut opaque_budget = MAX_OPAQUE_NAME_BYTES;
     loop {
         let ev = reader.read_event().map_err(|e| XmpError::Xml(e.to_string()))?;
         match ev {
@@ -240,8 +278,9 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                     }
                 }
                 scopes.push(scope);
-                let name = canonical(&String::from_utf8_lossy(e.name().as_ref()), &scopes);
-                let attrs = raw_attrs.into_iter().map(|(k, v)| (canonical(&k, &scopes), v)).collect();
+                let name = canonical(&String::from_utf8_lossy(e.name().as_ref()), &scopes, &mut opaque_budget)?;
+                let attrs =
+                    raw_attrs.into_iter().map(|(k, v)| Ok((canonical(&k, &scopes, &mut opaque_budget)?, v))).collect::<Result<_, XmpError>>()?;
                 let node = Node { name, attrs, ..Default::default() };
                 if matches!(ev, Event::Empty(_)) {
                     scopes.pop();
@@ -298,18 +337,29 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) {
+        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
             props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props);
+        collect_property(c, prefix, props, budget);
     }
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>) {
+/// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
+/// property is then left out, like other elements a limit has cut).
+fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+    let n = key.len();
+    if *budget < n {
+        return false;
+    }
+    *budget -= n;
+    true
+}
+
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -323,29 +373,36 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
+        if take_key_bytes(&key, budget) {
+            props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
+        }
         return;
     }
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props);
+            collect_property(c, &struct_prefix, props, budget);
         }
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props);
+        collect_description(d, &struct_prefix, props, budget);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
-            props.entry(format!("{struct_prefix}{k}")).or_default().push(v.clone());
+            let full = format!("{struct_prefix}{k}");
+            if take_key_bytes(&full, budget) {
+                props.entry(full).or_default().push(v.clone());
+            }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    props.entry(key).or_default().push(v);
+    if take_key_bytes(&key, budget) {
+        props.entry(key).or_default().push(v);
+    }
 }
 
 fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
@@ -446,8 +503,12 @@ fn parse_one_region(item: &XmpValue, px_dims: Option<(f64, f64)>) -> Option<Regi
 
 fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     let a = v.abs();
-    let d = a.trunc();
-    let m = (a - d) * 60.0;
+    let mut d = a.trunc();
+    let mut m = ((a - d) * 60.0 * 1e6).round() / 1e6;
+    if m >= 60.0 {
+        d += 1.0;
+        m = 0.0;
+    }
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
@@ -459,8 +520,10 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    // One budget for the whole document: several descriptions cannot each spend a fresh one.
+    let mut key_budget = MAX_KEY_BYTES;
     for d in descs {
-        collect_description(d, "", &mut props);
+        collect_description(d, "", &mut props, &mut key_budget);
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
         }
@@ -506,10 +569,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         label: first("xmp:Label"),
         ..Default::default()
     };
-    m.iso = num("exif:ISOSpeedRatings").or_else(|| num("exifEX:PhotographicSensitivity")).filter(|v| *v > 0.0).map(|v| v as u32);
-    if let Some(v) = props.get("exif:ISOSpeedRatings").and_then(|v| v.first()).and_then(|s| parse_number(s)) {
-        m.iso = Some(v as u32);
-    }
+    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find(|v| *v > 0.0).map(|v| v as u32);
     if let Some(spec) = props.get("exifEX:LensSpecification").filter(|v| v.len() == 4) {
         let v: Vec<f64> = spec.iter().filter_map(|s| parse_number(s)).collect();
         if v.len() == 4 {
@@ -536,6 +596,8 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     if let (Some(lat), Some(lon)) =
         (first("exif:GPSLatitude").and_then(|s| parse_gps_coord(&s)), first("exif:GPSLongitude").and_then(|s| parse_gps_coord(&s)))
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
     {
         let altitude = num("exif:GPSAltitude").map(|a| if first("exif:GPSAltitudeRef").as_deref() == Some("1") { -a } else { a });
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
@@ -623,12 +685,12 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     }
     x.push_str(">\n");
     for (k, v) in &simple {
-        x.push_str(&format!("   <{k}>{}</{k}>\n", escape(v.as_str())));
+        x.push_str(&format!("   <{k}>{}</{k}>\n", escape(xml_safe(v))));
     }
     for (k, v) in lc {
         if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             // element content: quotes needn't be escaped, which keeps the JSON readable
-            x.push_str(&format!("   <lc:{k}>{}</lc:{k}>\n", partial_escape(*v)));
+            x.push_str(&format!("   <lc:{k}>{}</lc:{k}>\n", partial_escape(xml_safe(v))));
         }
     }
     let array = |x: &mut String, k: &str, kind: &str, items: &[String], lang: bool| {
@@ -638,9 +700,9 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
         x.push_str(&format!("   <{k}>\n    <rdf:{kind}>\n"));
         for it in items {
             if lang {
-                x.push_str(&format!("     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", escape(it.as_str())));
+                x.push_str(&format!("     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", escape(xml_safe(it))));
             } else {
-                x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", escape(it.as_str())));
+                x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", escape(xml_safe(it))));
             }
         }
         x.push_str(&format!("    </rdf:{kind}>\n   </{k}>\n"));
@@ -754,6 +816,43 @@ mod tests {
     }
 
     #[test]
+    fn foreign_namespace_cannot_impersonate_known_metadata() {
+        for body in [
+            r#"xmp:Rating="2" lc:settings="foreign settings"/>"#,
+            r#"><xmp:Rating>2</xmp:Rating><lc:settings>foreign settings</lc:settings></rdf:Description>"#,
+        ] {
+            let packet = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+                xmlns:xmp="https://example.org/vendor/" xmlns:lc="https://example.org/vendor/" {body}</rdf:RDF>"#
+            );
+            let d = parse_xmp(&packet).unwrap();
+            assert_eq!(d.metadata.rating, None, "foreign rating: {packet}");
+            assert_eq!(d.lc_settings, None, "foreign settings: {packet}");
+            assert!(!d.properties.contains_key("xmp:Rating"));
+            assert!(!d.values.contains_key("lc:settings"));
+            assert!(d.properties.values().any(|v| v == &["foreign settings"]));
+            assert!(d.properties.keys().all(|key| !key.contains('/')), "opaque names must not create struct paths");
+        }
+    }
+
+    #[test]
+    fn foreign_namespace_names_are_distinct_and_scoped() {
+        let packet = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+                <xmp:Rating xmlns:xmp="https://example.org/one/">1</xmp:Rating>
+                <xmp:Rating xmlns:xmp="https://example.org/two/">2</xmp:Rating>
+                <xmp:Rating>4</xmp:Rating>
+            </rdf:Description></rdf:RDF>"#;
+        let d = parse_xmp(packet).unwrap();
+        assert_eq!(d.metadata.rating, Some(4), "a local rebinding must not escape its scope");
+        assert_eq!(d.properties.len(), 3, "different foreign URIs must not collide");
+        assert_eq!(d.values.len(), 3);
+        assert_eq!(d.properties["xmp:Rating"], vec!["4"]);
+        assert!(d.properties.values().any(|v| v == &["1"]));
+        assert!(d.properties.values().any(|v| v == &["2"]));
+    }
+
+    #[test]
     fn attribute_form_foreign_prefixes_and_structs() {
         let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
             <rdf:Description rdf:about="" xmlns:a="http://ns.adobe.com/xap/1.0/" xmlns:d="http://purl.org/dc/elements/1.1/"
@@ -802,6 +901,24 @@ mod tests {
         assert_eq!(read("True").copyright_url.as_deref(), Some("https://example.org/c"));
     }
 
+    /// A zero or negative `exif:ISOSpeedRatings` is "no ISO" (as in the EXIF reader), not `Some(0)`, and
+    /// must not hide a valid `exifEX:PhotographicSensitivity`.
+    #[test]
+    fn non_positive_iso_is_ignored() {
+        let read = |attrs: &str| {
+            let x = format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" {attrs}/>
+                </rdf:RDF></x:xmpmeta>"#
+            );
+            parse_xmp(&x).unwrap().metadata.iso
+        };
+        assert_eq!(read(r#"exif:ISOSpeedRatings="0" exifEX:PhotographicSensitivity="400""#), Some(400));
+        assert_eq!(read(r#"exif:ISOSpeedRatings="-100""#), None);
+        assert_eq!(read(r#"exif:ISOSpeedRatings="0""#), None);
+        assert_eq!(read(r#"exif:ISOSpeedRatings="200""#), Some(200));
+    }
+
     #[test]
     fn malformed_inputs() {
         assert!(parse_xmp("<a><b></a>").is_ok() || parse_xmp("<a><b></a>").is_err());
@@ -838,6 +955,26 @@ mod tests {
         assert_eq!(parse_gps_coord(""), None);
         assert_eq!(parse_gps_coord("é"), None);
         assert_eq!(fmt_gps_coord(-45.51, 'N', 'S'), "45,30.600000S");
+        assert_eq!(fmt_gps_coord(10.9999999999, 'N', 'S'), "11,0.000000N");
+        assert_eq!(fmt_gps_coord(-0.9999999999, 'E', 'W'), "1,0.000000W");
+    }
+
+    /// Like the EXIF and GPX readers, XMP drops a position outside latitude ±90° / longitude ±180°.
+    #[test]
+    fn xmp_gps_out_of_range_rejected() {
+        let gps = |lat: &str, lon: &str| {
+            let x = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:e="http://ns.adobe.com/exif/1.0/" e:GPSLatitude="{lat}" e:GPSLongitude="{lon}"/>"#
+            );
+            parse_xmp(&x).unwrap().metadata.gps
+        };
+        assert_eq!(gps("95,0N", "200,30E"), None);
+        assert_eq!(gps("95,0N", "10,0E"), None);
+        assert_eq!(gps("10,0S", "200,30W"), None);
+        assert_eq!(gps("90,0,1N", "0,0E"), None);
+        assert_eq!(gps("90,0N", "180,0E"), Some(Gps { latitude: 90.0, longitude: 180.0, altitude: None }));
+        assert_eq!(gps("90,0S", "180,0W"), Some(Gps { latitude: -90.0, longitude: -180.0, altitude: None }));
     }
 
     /// MWG Region Guidelines v2.0, element form (`rdf:parseType="Resource"`, self-closing `Area`) — how
@@ -1038,5 +1175,53 @@ mod tests {
         let mut a = Metadata::default();
         a.overlay_user_fields(&b);
         assert_eq!(a.regions, vec![with_region]);
+    }
+
+    #[test]
+    fn writer_drops_characters_xml_1_0_forbids() {
+        let bad = "a\u{1}b\u{0}c\u{FFFE}d\u{FFFF}e\u{1F}\tf\ng\rh";
+        let m = Metadata { make: Some(bad.into()), caption: Some(bad.into()), keywords: vec![bad.into()], ..Default::default() };
+        let x = write_xmp_lc(&m, &[("settings", bad)]);
+        let illegal: Vec<char> =
+            x.chars().filter(|&c| (c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')) || c == '\u{FFFE}' || c == '\u{FFFF}').collect();
+        assert!(illegal.is_empty(), "illegal XML chars in output: {illegal:?}");
+        assert!(x.contains(">abcde\tf\ng\rh<"), "allowed characters must survive: {x}");
+    }
+
+    #[test]
+    fn numeric_references_to_forbidden_characters_are_not_decoded() {
+        assert_eq!(entity("#1"), None);
+        assert_eq!(entity("#0"), None);
+        assert_eq!(entity("#xFFFE"), None);
+        assert_eq!(entity("#x41"), Some('A'));
+        assert_eq!(entity("#9"), Some('\t'));
+    }
+
+    /// Flattened keys repeat their whole ancestor path, so a long nested name with a wide child
+    /// fan-out would otherwise retain its prefix once per leaf: the cumulative key budget stops it
+    /// (a 65 KB document with 3000 leaves must not retain ~2.4 MB of key text).
+    #[test]
+    fn flattened_keys_stay_within_the_cumulative_budget() {
+        let level = "n".repeat(200);
+        let mut doc = String::from(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:lc=\"https://lightcraft.example/lc/\"><rdf:RDF><rdf:Description><lc:root rdf:parseType=\"Resource\">",
+        );
+        for _ in 0..4 {
+            doc.push_str(&format!("<lc:{level} rdf:parseType=\"Resource\">"));
+        }
+        // each leaf has a name of its own, so each one adds a key
+        for i in 0..3000 {
+            doc.push_str(&format!("<lc:leaf{i} lc:att=\"v\"/>"));
+        }
+        doc.push_str("</lc:root>");
+        for _ in 0..4 {
+            doc.push_str(&format!("</lc:{level}>"));
+        }
+        doc.push_str("</rdf:Description></rdf:RDF></x:xmpmeta>");
+        let d = parse_xmp(&doc).unwrap();
+        let total: usize = d.properties.keys().map(String::len).sum();
+        assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
+        assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
+        assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
     }
 }

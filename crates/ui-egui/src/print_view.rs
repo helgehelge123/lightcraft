@@ -105,14 +105,14 @@ fn length(ui: &mut Ui, id: &str, inches: f64, unit: Unit, min_in: f64, max_in: f
             .max_decimals(decimals(unit))
             .suffix(format!(" {}", unit.label())),
     );
-    register(ui.ctx(), format!("drag:{id}"), r.rect);
+    register(ui, format!("drag:{id}"), r.rect);
     r.changed().then(|| unit.to_inches(v))
 }
 
 fn check(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
     let mut v = value;
     let r = ui.checkbox(&mut v, crate::i18n::tr(label));
-    register(ui.ctx(), format!("check:{id}"), r.rect);
+    register(ui, format!("check:{id}"), r.rect);
     r.changed().then_some(v)
 }
 
@@ -130,7 +130,7 @@ fn choice<V: PartialEq + Copy>(ui: &mut Ui, id: &str, options: &[(V, &str)], cur
 fn colour(ui: &mut Ui, id: &str, rgb: [u8; 3]) -> Option<[u8; 3]> {
     let mut c = rgb;
     let r = ui.color_edit_button_srgb(&mut c);
-    register(ui.ctx(), format!("color:{id}"), r.rect);
+    register(ui, format!("color:{id}"), r.rect);
     (c != rgb).then_some(c)
 }
 
@@ -141,8 +141,23 @@ fn paper_label(name: &str) -> String {
         "legal" => "Legal".into(),
         "tabloid" => "Tabloid".into(),
         "custom" => "Custom".into(),
+        // Japanese photo and postcard papers: the customary name and its metric size.
+        "l" => "L判 (89 × 127 mm)".into(),
+        "2l" => "2L判 (127 × 178 mm)".into(),
+        "kg" => "KG判 (102 × 152 mm)".into(),
+        "postcard" => "はがき (100 × 148 mm)".into(),
+        "double-postcard" => "往復はがき (148 × 200 mm)".into(),
+        "6cut" => "六切 (203 × 254 mm)".into(),
+        "4cut" => "四切 (254 × 305 mm)".into(),
+        "business-card" => "名刺 (55 × 91 mm)".into(),
         other => other.replace('x', " × ") + " in",
     }
+}
+
+/// The paper the selector shows as current: `custom`, or the canonical name an alias stands for,
+/// so a `print.set` with `はがき` still selects the `postcard` option.
+fn current_paper(paper: &str) -> &str {
+    if paper.eq_ignore_ascii_case("custom") { "custom" } else { layout::paper_name(paper).unwrap_or(paper) }
 }
 
 /// The dialog's body: the settings column and the page preview side by side.
@@ -197,6 +212,14 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
+        if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
+            let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
+            for path in paths {
+                if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path})) {
+                    app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
+                }
+            }
+        }
     });
     let names: Vec<String> = app.session.print_templates.iter().map(|t| t.name.clone()).collect();
     for (i, name) in names.iter().enumerate() {
@@ -205,6 +228,15 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, &format!("printTemplateDelete-{i}"), "Delete", false).clicked() {
                     run(app, &ctx, "print.template.delete", json!({"name": name}));
+                }
+                if app.services.save_print_template.is_some() && text_button(ui, &format!("printTemplateExport-{i}"), "Export…", false).clicked() {
+                    let stem = lightcraft_engine::slide_template::file_stem(name).unwrap_or_else(|| "Print Template".into());
+                    let file = format!("{stem}.{}", lightcraft_engine::print::template::FILE_EXT);
+                    if let Some(path) = app.services.save_print_template.as_mut().and_then(|save| save(&file))
+                        && let Some(r) = run(app, &ctx, "print.template.export", json!({"name": name, "path": path}))
+                    {
+                        app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
+                    }
                 }
                 if text_button(ui, &format!("printTemplateApply-{i}"), "Apply", false).clicked() {
                     run(app, &ctx, "print.template.apply", json!({"name": name}));
@@ -252,7 +284,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         }
         let mut pt = im.stroke_width_pt;
         let r = ui.add(egui::DragValue::new(&mut pt).range(0.0..=36.0).speed(0.05).max_decimals(2).suffix(" pt"));
-        register(ui.ctx(), "drag:printStrokeWidth", r.rect);
+        register(ui, "drag:printStrokeWidth", r.rect);
         if r.changed() {
             patch(app, &ctx, json!({"image": {"strokeWidthPt": pt}}));
         }
@@ -271,9 +303,9 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             row(ui, t, "Grid", |ui| {
                 let (mut c, mut r) = (g.columns, g.rows);
                 let a = ui.add(egui::DragValue::new(&mut c).range(1..=layout::MAX_GRID).suffix(" cols"));
-                register(ui.ctx(), "drag:printColumns", a.rect);
+                register(ui, "drag:printColumns", a.rect);
                 let b = ui.add(egui::DragValue::new(&mut r).range(1..=layout::MAX_GRID).suffix(" rows"));
-                register(ui.ctx(), "drag:printRows", b.rect);
+                register(ui, "drag:printRows", b.rect);
                 if a.changed() || b.changed() {
                     patch(app, &ctx, json!({"layout": {"grid": {"columns": c, "rows": r}}}));
                 }
@@ -374,15 +406,16 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
-        let current = if l.page.paper.eq_ignore_ascii_case("custom") { "custom".to_string() } else { l.page.paper.to_ascii_lowercase() };
-        let c = egui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(&current)).show_ui(ui, |ui| {
+        let current = current_paper(&l.page.paper);
+        let c = egui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
             for name in layout::paper_names().chain(std::iter::once("custom")) {
                 if ui.selectable_label(current == name, paper_label(name)).clicked() {
                     patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
                 }
             }
         });
-        register(ui.ctx(), "combo:printPaper", c.response.rect);
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
+        register(ui, "combo:printPaper", c.response.rect);
     });
     if l.page.paper.eq_ignore_ascii_case("custom") {
         row(ui, t, "Size", |ui| {
@@ -420,12 +453,25 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             patch(app, &ctx, json!({"page": {"background": c}}));
         }
     });
+    if compose::has_page_options(l.style) {
+        ui.label(egui::RichText::new(crate::i18n::tr("Page Options")).color(t.text_label));
+        let p = &st.page;
+        for (id, label, on, key) in [
+            ("printPageNumbers", "Page Numbers", p.page_numbers, "pageNumbers"),
+            ("printPageInfo", "Page Info", p.page_info, "pageInfo"),
+            ("printCropMarks", "Crop Marks", p.crop_marks, "cropMarks"),
+        ] {
+            if let Some(v) = check(ui, id, label, on) {
+                patch(app, &ctx, json!({"page": {(key): v}}));
+            }
+        }
+    }
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
         let mut ppi = st.job.ppi;
         let r = ui.add(egui::DragValue::new(&mut ppi).range(72.0..=720.0).speed(1.0).max_decimals(0).suffix(" ppi"));
-        register(ui.ctx(), "drag:printPpi", r.rect);
+        register(ui, "drag:printPpi", r.rect);
         if r.changed() {
             patch(app, &ctx, json!({"job": {"ppi": ppi}}));
         }
@@ -456,7 +502,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
         let c = egui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
                 let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
-                register(ui.ctx(), format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
+                register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
                 if r.clicked() && color.profile != managed(space) {
                     patch_color(app, &ctx, "profile", to_value(managed(space)));
                 }
@@ -466,11 +512,12 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
             }
             if app.services.pick_display_profile.is_some() {
                 let r = ui.selectable_label(false, crate::i18n::tr("Other…"));
-                register(ui.ctx(), "item:printProfile-other", r.rect);
+                register(ui, "item:printProfile-other", r.rect);
                 pick |= r.clicked();
             }
         });
-        register(ui.ctx(), "combo:printProfile", c.response.rect);
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Profile"));
+        register(ui, "combo:printProfile", c.response.rect);
     });
     if pick && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next()) {
         patch_color(app, &ctx, "profile", json!({"kind": "icc", "path": path}));
@@ -489,7 +536,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
         row(ui, t, label, |ui| {
             let mut v = value;
             let r = ui.add(egui::DragValue::new(&mut v).range(-100.0..=100.0).speed(0.5).max_decimals(0));
-            register(ui.ctx(), format!("drag:print{label}"), r.rect);
+            register(ui, format!("drag:print{label}"), r.rect);
             if r.changed() {
                 patch_color(app, &ctx, key, json!(v));
             }
@@ -544,7 +591,6 @@ impl Sheet {
 }
 
 fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, ids: &[PhotoId], pages: usize) {
-    let ctx = ui.ctx().clone();
     // room for the page buttons and, for a package, the selected cell's row (which may wrap)
     let footer = if st.layout.style.is_package() { 104.0 } else { 44.0 };
     let size = vec2(ui.available_width(), (ui.available_height() - footer).max(120.0));
@@ -560,7 +606,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
     let inner = Rect::from_min_max(area.min + vec2(ruler, ruler), area.max).shrink(14.0);
     let scale = ((inner.width() as f64 / pw).min(inner.height() as f64 / ph) as f32).max(1.0);
     let sheet = Sheet { page: Rect::from_center_size(inner.center(), vec2(pw as f32, ph as f32) * scale), scale };
-    register(&ctx, "print:page", sheet.page);
+    register(ui, "print:page", sheet.page);
 
     painter.rect_filled(sheet.page.translate(vec2(2.0, 3.0)), 0.0, Color32::from_black_alpha(70));
     let bg = st.page.background;
@@ -607,11 +653,13 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
             Some(page) => page.iter().map(|(r, id)| (*r, Some(*id))).collect(),
             None => st.layout.grid_rects().unwrap_or_default().into_iter().map(|r| (r, None)).collect(),
         };
+        let mut shown = Vec::new();
         for (i, (r, photo)) in cells.iter().enumerate() {
             let rect = sheet.rect(r);
-            register(&ctx, format!("print:gridcell:{i}"), rect);
-            paint_cell(app, &painter, t, st, rect, *photo, &sheet, r);
+            register(ui, format!("print:gridcell:{i}"), rect);
+            shown.extend(paint_cell(app, &painter, t, st, rect, *photo, &sheet, r));
         }
+        page_options(&painter, st, &sheet, &shown, pu.page + 1);
     }
 
     // footer: page navigation and the selected cell
@@ -621,7 +669,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
             pu.selected = None;
         }
         let label = ui.label(egui::RichText::new(format!("{} {} / {}", crate::i18n::tr("Page"), pu.page + 1, pages)).color(t.text));
-        register(ui.ctx(), "print:pageLabel", label.rect);
+        register(ui, "print:pageLabel", label.rect);
         if text_button(ui, "printPageNext", "▶", false).clicked() && pu.page + 1 < pages {
             pu.page += 1;
             pu.selected = None;
@@ -662,8 +710,8 @@ fn package_cells(
         let photo = if st.layout.style == Style::CustomPackage { c.photo.map(PhotoId).or(first) } else { first };
         let rect = sheet.rect(&c.rect);
         paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
-        let resp = ui.interact(rect, egui::Id::new(("print-cell", c.id)), Sense::click_and_drag());
-        register(&ctx, format!("print:cell:{}", c.id), rect);
+        let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
+        register(ui, format!("print:cell:{}", c.id), rect);
         if resp.clicked() || resp.drag_started() {
             pu.selected = Some(c.id);
         }
@@ -682,7 +730,7 @@ fn package_cells(
             pu.drag = None;
         }
         let id = c.id;
-        resp.context_menu(|ui| {
+        crate::widgets::context_menu(&resp, |ui| {
             for (how, label) in
                 [("toFront", "Bring to Front"), ("forward", "Bring Forward"), ("backward", "Send Backward"), ("toBack", "Send to Back")]
             {
@@ -704,8 +752,8 @@ fn package_cells(
     painter.rect_stroke(rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
     let handle = Rect::from_center_size(rect.right_bottom(), Vec2::splat(HANDLE));
     painter.rect_filled(handle, 2.0, t.accent);
-    let resp = ui.interact(handle, egui::Id::new(("print-resize", sel.id)), Sense::drag());
-    register(&ctx, format!("print:resize:{}", sel.id), handle);
+    let resp = ui.interact(handle, egui::Id::unique(("print-resize", sel.id)), Sense::drag());
+    register(ui, format!("print:resize:{}", sel.id), handle);
     if resp.drag_started() {
         pu.drag = Some(Drag { cell: sel.id, origin: sel.rect, resize: true, press: press_origin(ui, &resp), total: Vec2::ZERO });
     }
@@ -782,7 +830,7 @@ fn paint_cell(
     photo: Option<PhotoId>,
     sheet: &Sheet,
     inches: &layout::Rect,
-) {
+) -> Option<Rect> {
     let im = &st.image;
     if st.guides.show_cells {
         painter.rect_stroke(cell, 0.0, Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 150, 190, 150)), StrokeKind::Inside);
@@ -794,7 +842,7 @@ fn paint_cell(
     };
     let avail = cell.shrink(border);
     if avail.width() < 1.0 || avail.height() < 1.0 {
-        return;
+        return None;
     }
     // the photo's shape: its cropped size, or 3:2 for a placeholder
     let (nw, nh) = photo.and_then(|id| app.session.catalog.photo(id)).map_or((3.0, 2.0), |p| {
@@ -804,7 +852,7 @@ fn paint_cell(
     let scale = 8.0; // sub-point resolution for the rounding in `place`
     let aw = (f64::from(avail.width()) * scale).round() as usize;
     let ah = (f64::from(avail.height()) * scale).round() as usize;
-    let Some(p) = place(nw, nh, aw, ah, im.zoom_to_fill, im.rotate_to_fit) else { return };
+    let p = place(nw, nh, aw, ah, im.zoom_to_fill, im.rotate_to_fit)?;
     let shown = Rect::from_center_size(avail.center(), vec2(p.w as f32, p.h as f32) / scale as f32);
     let visible = shown.intersect(avail);
     if border > 0.0 {
@@ -841,6 +889,8 @@ fn paint_cell(
             clip.add(egui::Shape::mesh(mesh));
         }
         None => {
+            // the page is paper in every theme (its colour is the print's, not the theme's), so
+            // these stay fixed greys: a photo still to come, and an empty cell
             clip.rect_filled(shown, 0.0, if photo.is_some() { Color32::from_gray(52) } else { Color32::from_gray(200) });
         }
     }
@@ -855,6 +905,41 @@ fn paint_cell(
         let at = pos2(cell.center().x - galley.size().x / 2.0, cell.bottom() - galley.size().y - 3.0);
         painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(2.0), 2.0, Color32::from_black_alpha(160));
         painter.galley(at, galley, Color32::WHITE);
+    }
+    Some(visible)
+}
+
+/// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each
+/// photo, the page number at the bottom right and the print settings at the bottom left.
+/// Packages draw none of them, as the print doesn't ([`compose::has_page_options`]).
+fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize) {
+    if !compose::has_page_options(st.layout.style) {
+        return;
+    }
+    let p = &st.page;
+    let ink = compose::mark_ink(p.background);
+    let ink = Color32::from_rgb(ink[0], ink[1], ink[2]);
+    if p.crop_marks {
+        let (len, gap) = (compose::CROP_MARK_IN as f32 * sheet.scale, compose::CROP_MARK_GAP_IN as f32 * sheet.scale);
+        let stroke = Stroke::new(1.0, ink);
+        for r in photos {
+            for (corner, dx, dy) in
+                [(r.left_top(), -1.0, -1.0), (r.right_top(), 1.0, -1.0), (r.left_bottom(), -1.0, 1.0), (r.right_bottom(), 1.0, 1.0)]
+            {
+                painter.line_segment([corner + vec2(dx * gap, 0.0), corner + vec2(dx * (gap + len), 0.0)], stroke);
+                painter.line_segment([corner + vec2(0.0, dy * gap), corner + vec2(0.0, dy * (gap + len))], stroke);
+            }
+        }
+    }
+    let Ok(area) = st.layout.printable() else { return };
+    let area = sheet.rect(&area);
+    let font = egui::FontId::proportional((compose::PAGE_TEXT_PT as f32 / 72.0 * sheet.scale).max(4.0));
+    let y = (area.bottom() + sheet.page.bottom()) / 2.0;
+    if p.page_numbers {
+        painter.text(pos2(area.right(), y), Align2::RIGHT_CENTER, number.to_string(), font.clone(), ink);
+    }
+    if p.page_info {
+        painter.text(pos2(area.left(), y), Align2::LEFT_CENTER, compose::page_info_text(st), font, ink);
     }
 }
 
@@ -909,5 +994,17 @@ mod tests {
         assert_eq!(trim(2.5), "2.5");
         assert_eq!(paper_label("a4"), "A4");
         assert_eq!(paper_label("4x6"), "4 × 6 in");
+        // The Japanese photo and postcard papers show their customary name and metric size.
+        assert_eq!(paper_label("l"), "L判 (89 × 127 mm)");
+        assert_eq!(paper_label("postcard"), "はがき (100 × 148 mm)");
+        assert_eq!(paper_label("double-postcard"), "往復はがき (148 × 200 mm)");
+        assert_eq!(paper_label("6cut"), "六切 (203 × 254 mm)");
+        assert_eq!(paper_label("4cut"), "四切 (254 × 305 mm)");
+        // The selector resolves an alias stored by print.set to the canonical option.
+        assert_eq!(current_paper("はがき"), "postcard");
+        assert_eq!(current_paper("L判"), "l");
+        assert_eq!(current_paper("Custom"), "custom");
+        assert_eq!(paper_label(current_paper("はがき")), "はがき (100 × 148 mm)");
+        assert_eq!(paper_label(current_paper("a4")), "A4");
     }
 }
