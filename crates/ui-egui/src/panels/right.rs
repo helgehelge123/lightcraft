@@ -21,7 +21,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // the Keyword List is the library's, not a photo's: it is there without a selection
             if app.ui.right == RightPanel::Keywords {
                 // (without a selection there is no Add keyword box for Add Keywords to put the cursor in)
-                app.ui.focus_keywords = false;
+                app.ui.focus_keywords = None;
                 egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     if fold_header(app, ui, "keywording", "Keywords") {
@@ -47,13 +47,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             area = area.vertical_scroll_offset(offset);
         }
         // (where the pass starts: by its end egui may have pulled a shrunken panel's offset back)
-        let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::new(AREA)));
-        let start = held.or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.offset.y));
+        let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::unique(AREA)));
+        let start = held.or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.clamped_offset().y));
         ui.data_mut(|d| match start {
             Some(o) => {
-                d.insert_temp(egui::Id::new(OFFSET), o);
+                d.insert_temp(egui::Id::unique(OFFSET), o);
             }
-            None => d.remove::<f32>(egui::Id::new(OFFSET)),
+            None => d.remove::<f32>(egui::Id::unique(OFFSET)),
         });
         let scrolled = area.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -71,7 +71,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::None => {}
             }
         });
-        ui.data_mut(|d| d.insert_temp(egui::Id::new(AREA), scrolled.id));
+        ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
     });
 }
 
@@ -85,11 +85,11 @@ const HOLD: &str = "right-scroll-hold";
 /// the Keywords box grew. Set on the scroll area as it starts, so the pass drawn again shows the list
 /// in place (a scroll asked for during a pass only lands a frame later).
 fn held_offset(ctx: &egui::Context) -> Option<f32> {
-    let (grew, asked) = ctx.data_mut(|d| d.remove_temp::<(f32, u64)>(egui::Id::new(HOLD)))?;
+    let (grew, asked) = ctx.data_mut(|d| d.remove_temp::<(f32, u64)>(egui::Id::unique(HOLD)))?;
     if asked.checked_add(1) != Some(ctx.cumulative_pass_nr()) {
         return None;
     }
-    let offset = ctx.data(|d| d.get_temp::<f32>(egui::Id::new(OFFSET)))?;
+    let offset = ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(OFFSET)))?;
     Some((offset + grew).max(0.0)).filter(|o| o.is_finite())
 }
 
@@ -111,8 +111,8 @@ pub fn fold_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: 
 pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, resp: &egui::Response, title: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let open = !app.ui.section_folded(id);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
-    register(ui.ctx(), format!("section:{id}"), r);
+    crate::widgets::announce_disclosure(resp, true, open, title);
+    register(ui, format!("section:{id}"), r);
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(r, 0.0, t.chrome.gamma_multiply(1.06));
@@ -180,18 +180,18 @@ fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) -> String {
 
 /// "Custom" row of the aspect menu: two number fields and an Apply button (`crop.aspect` `[w, h]`).
 fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let key = egui::Id::new("crop-custom-aspect");
+    let key = egui::Id::unique("crop-custom-aspect");
     let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
     let mut apply = false;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Custom"));
         let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0));
         crate::widgets::screen_reader_name(ui.ctx(), a.id, crate::i18n::tr("Width"));
-        register(ui.ctx(), "field:cropCustomW", a.rect);
+        register(ui, "field:cropCustomW", a.rect);
         ui.label("×");
         let b = ui.add(egui::TextEdit::singleline(&mut h).desired_width(34.0));
         crate::widgets::screen_reader_name(ui.ctx(), b.id, crate::i18n::tr("Height"));
-        register(ui.ctx(), "field:cropCustomH", b.rect);
+        register(ui, "field:cropCustomH", b.rect);
         let go = text_button(ui, "cropCustomApply", "Apply", false);
         apply = go.clicked() || ((a.lost_focus() || b.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
     });
@@ -286,7 +286,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         // keystroke: no half-typed angles, one undo step
                         .update_while_editing(false),
                 );
-                crate::widgets::register(ui.ctx(), "cropAngleField", r.rect);
+                crate::widgets::register(ui, "cropAngleField", r.rect);
                 // a drag on the field is one undo step, like the slider's
                 if r.drag_started() {
                     let _ = app.run("develop.beginInteraction", json!({"label": "Straighten"}));
@@ -295,7 +295,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // apply only a new angle
                 // Esc keeps the old angle, but egui applies the typed text on the frame after the
                 // one where Esc took the focus away: remember the Esc for that frame
-                let cancel = egui::Id::new("cropAngleFieldEscaped");
+                let cancel = egui::Id::unique("cropAngleFieldEscaped");
                 let escaped = ui.data_mut(|m| m.remove_temp::<bool>(cancel)).unwrap_or(false);
                 if escape && r.lost_focus() {
                     ui.data_mut(|m| m.insert_temp(cancel, true));
@@ -549,7 +549,7 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         egui::Popup::menu(&r).show(|ui| {
             for m in ToolOverlay::ALL {
                 let item = ui.selectable_label(m == current, crate::i18n::tr(m.label()));
-                register(ui.ctx(), format!("toolOverlay:{}", m.name()), item.rect);
+                register(ui, format!("toolOverlay:{}", m.name()), item.rect);
                 if item.clicked() {
                     let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
                 }
@@ -656,7 +656,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(&format!("{l:?}")));
                 let key = format!("{l:?}").to_lowercase();
-                register(ui.ctx(), format!("label:{key}"), r);
+                register(ui, format!("label:{key}"), r);
                 let on = p.label == Some(l);
                 ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
                 if on {
@@ -683,6 +683,8 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let for_selected = several && app.ui.settings.info_selected_photos;
     let m = shown_meta(&app.session.catalog, &p, &selected, for_selected);
     let mixed = if for_selected { mixed_meta(&app.session.catalog, &selected, &m) } else { Vec::new() };
+    // the photos an edit goes to: Target Photo edits the photo it shows
+    let targets = if several && !for_selected { vec![id] } else { selected.clone() };
     padded(ui, |ui| {
         if several {
             metadata_for(app, ui);
@@ -694,15 +696,15 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("Extended Description", "extendedDescription", &m.extended_description, 3),
             ("Copyright", "copyright", &m.copyright, 1),
         ] {
-            meta_field(app, ui, label, key, value, lines, mixed.contains(&key));
+            meta_field(app, ui, label, key, value, lines, mixed.contains(&key), &targets);
         }
-        copyright_status(app, ui, m.copyright_status, mixed.contains(&"copyrightStatus"));
+        copyright_status(app, ui, m.copyright_status, mixed.contains(&"copyrightStatus"), &targets);
         for (label, key, value, lines) in [
             ("Rights Usage Terms", "usageTerms", &m.usage_terms, 2),
             ("Copyright Info URL", "copyrightUrl", &m.copyright_url, 1),
             ("Creator", "creator", &m.creator, 1),
         ] {
-            meta_field(app, ui, label, key, value, lines, mixed.contains(&key));
+            meta_field(app, ui, label, key, value, lines, mixed.contains(&key), &targets);
         }
         // file: name (rename), path (reveal), capture time (edit)
         let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
@@ -751,14 +753,14 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("State / Province", "state", &m.state),
             ("Country", "country", &m.country),
         ] {
-            meta_field(app, ui, label, key, value, 1, mixed.contains(&key));
+            meta_field(app, ui, label, key, value, 1, mixed.contains(&key), &targets);
         }
         // GPS: typed as "lat, lon" (or degrees / minutes / seconds); empty clears it
         let gps_mixed = mixed.contains(&"gps");
         let gps = if gps_mixed { String::new() } else { m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default() };
-        let gid = egui::Id::new("info-gps");
+        let gid = egui::Id::unique("info-gps");
         ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
-        let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &selected));
+        let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
         edit.typed |= edit.text != edit.start;
@@ -890,7 +892,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new(text).size(12.0).color(t.text));
             });
-            register(ui.ctx(), "info:focus", r.response.rect);
+            register(ui, "info:focus", r.response.rect);
         }
     });
 }
@@ -916,13 +918,14 @@ const MIXED: &str = "Mixed";
 
 /// An Info panel field's edit under way, kept in egui memory between frames. A field saves when
 /// its text is not the text the edit started from, so a field left as it was saves nothing, even
-/// when what the panel shows changed during the edit. It saves to the photos selected when the
-/// edit started, also when the selection changed since.
+/// when what the panel shows changed during the edit. It saves to the photos it edited when the
+/// edit started (the selected photos, or Target Photo's photo alone), also when the selection
+/// changed since.
 #[derive(Clone)]
 struct FieldEdit {
     text: String,
     start: String,
-    /// The selected photos when the edit started (`photo.setMeta` `ids`).
+    /// The photos the field edited when the edit started (`photo.setMeta` `ids`).
     ids: Vec<u64>,
     /// The field said Mixed when the edit started.
     mixed: bool,
@@ -931,8 +934,8 @@ struct FieldEdit {
 }
 
 impl FieldEdit {
-    fn new(value: &str, mixed: bool, selected: &[PhotoId]) -> Self {
-        let ids = selected.iter().map(|id| id.0).collect();
+    fn new(value: &str, mixed: bool, targets: &[PhotoId]) -> Self {
+        let ids = targets.iter().map(|id| id.0).collect();
         FieldEdit { text: value.to_string(), start: value.to_string(), ids, mixed, typed: false }
     }
 
@@ -1032,8 +1035,9 @@ fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`). `mixed`: the
-/// selected photos' statuses differ, and any status picked is given to all of them.
-fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool) {
+/// selected photos' statuses differ, and any status picked is given to all of them. A status
+/// picked goes to the photos `targets`.
+fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool, targets: &[PhotoId]) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
     let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
@@ -1041,24 +1045,27 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
         for st in lightcraft_catalog::CopyrightStatus::ALL {
             let on = !mixed && st == current;
             if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
-                let _ = app.run("photo.setMeta", json!({"copyrightStatus": st.id()}));
+                let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
+                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
             }
         }
     });
-    register(ui.ctx(), "field:copyrightStatus", r.response.rect);
+    crate::widgets::name_combo(&r.response, crate::i18n::tr("Copyright Status"));
+    register(ui, "field:copyrightStatus", r.response.rect);
     ui.add_space(6.0);
 }
 
 /// A labeled metadata text field: the typed text lives in egui memory while focused and is
 /// saved (photo.setMeta `key`) when the field loses focus. `mixed`: the selected photos' values
 /// differ, so the field starts empty and says so, and is saved only when it was typed in (left
-/// empty, it clears the field on every selected photo).
-fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize, mixed: bool) {
+/// empty, it clears the field on every selected photo). The edit is saved to the photos `targets`.
+#[allow(clippy::too_many_arguments)]
+fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize, mixed: bool, targets: &[PhotoId]) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
-    let id = egui::Id::new(("info-field", key));
+    let id = egui::Id::unique(("info-field", key));
     let value = if mixed { "" } else { value };
-    let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed, &app.session.selected()));
+    let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
     let widget = format!("field:{key}");
     let field = if lines > 1 {
         crate::text_field::TextField::multiline(&widget, &mut edit.text).rows(lines)
@@ -1099,7 +1106,7 @@ fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
-        let kid = egui::Id::new("kw-input");
+        let kid = egui::Id::unique("kw-input");
         let mut text = ui.data_mut(|d| d.get_temp::<String>(kid).unwrap_or_default());
         // the keywords every selected photo has: those only some have are still offered and suggested
         let selection = app.session.selected();
@@ -1108,7 +1115,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // while the box has the cursor it offers the library's keywords for what is being typed,
         // right under itself; it stays for a click on one of them, which takes the cursor away
         let field = crate::text_field::id("field:keyword");
-        let oid = egui::Id::new("kw-offers");
+        let oid = egui::Id::unique("kw-offers");
         let pass = ui.ctx().cumulative_pass_nr();
         // (remembered from the last frame: the text the highlight was for and the keyword it was
         // on, where the offers were drawn, and whether the box was in sight)
@@ -1155,10 +1162,10 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (after an offer was taken the box starts a new edit, empty: Esc has nothing to bring back)
         // (asked for on the frame before this one only: a box that wasn't drawn then, its panel
         // switched away, doesn't claim the cursor whenever it is next drawn)
-        let bid = egui::Id::new("kw-begin");
+        let bid = egui::Id::unique("kw-begin");
         let begin = ui.data_mut(|d| d.remove_temp::<u64>(bid)).is_some_and(|asked| asked.checked_add(1) == Some(pass));
         // Add Keywords (⌘K) asks for the cursor too, and for the box to be scrolled into sight
-        let asked = std::mem::take(&mut app.ui.focus_keywords);
+        let asked = app.ui.focus_keywords.take().is_some_and(|at| pass <= at.saturating_add(crate::state::FOCUS_KEYWORDS_PASSES));
         let r = crate::text_field::TextField::singleline("field:keyword", &mut text)
             .hint(crate::i18n::tr("Add keyword"))
             .width(f32::INFINITY)
@@ -1229,7 +1236,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         // the painter: click photos in the grid to give them (or take away) a keyword
         ui.horizontal(|ui| {
-            let pid = egui::Id::new("kw-painter");
+            let pid = egui::Id::unique("kw-painter");
             let painting = app.ui.keyword_painter.clone();
             let mut k: String = ui.data(|d| d.get_temp(pid)).unwrap_or_else(|| painting.clone().unwrap_or_default());
             // (fixed while painting: Stop first)
@@ -1270,7 +1277,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let name = names.get(i).unwrap_or(&whole);
                     let r = ui.add(egui::Button::new(egui::RichText::new(format!("+ {name}")).color(t.text_label)).corner_radius(10.0));
                     let r = if grouped { r.on_hover_text(&whole) } else { r };
-                    register(ui.ctx(), format!("kwSuggest:{k}"), r.rect);
+                    register(ui, format!("kwSuggest:{k}"), r.rect);
                     if r.clicked() {
                         let _ = app.run("photo.setMeta", json!({"addKeywords": [k]}));
                     }
@@ -1287,7 +1294,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// while the change does not come from the box itself (the pointer on it, or typing in its field).
 fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     let height = ui.cursor().top() - top;
-    let key = egui::Id::new("kw-box-height");
+    let key = egui::Id::unique("kw-box-height");
     let pass = ui.ctx().cumulative_pass_nr();
     // (the height drawn on the pass before: one from an earlier visit to the panel says nothing)
     let before = ui.data(|d| d.get_temp::<(f32, u64)>(key)).filter(|&(_, drawn)| drawn.checked_add(1) == Some(pass)).map(|(h, _)| h);
@@ -1304,7 +1311,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
     if on_box || typing {
         return;
     }
-    ui.data_mut(|d| d.insert_temp(egui::Id::new(HOLD), (grew, pass)));
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique(HOLD), (grew, pass)));
     // (drawn again at once at the new offset, so the list never shows a frame out of place)
     ui.ctx().request_discard("the Keyword List holds its place");
 }
@@ -1335,7 +1342,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.separator();
                 // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)
                 let edit = ui.button(crate::i18n::tr("Edit Set…"));
-                register(ui.ctx(), "keywordSetMenu:edit", edit.rect);
+                register(ui, "keywordSetMenu:edit", edit.rect);
                 if edit.clicked() {
                     let mut slots: Vec<String> =
                         sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
@@ -1364,7 +1371,8 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let _ = app.run("keyword.deleteSet", json!({"name": current}));
                 }
             });
-        register(ui.ctx(), "keywordSetCombo", combo.response.rect);
+        crate::widgets::name_combo(&combo.response, crate::i18n::tr("Keyword Set"));
+        register(ui, "keywordSetCombo", combo.response.rect);
     });
     let kws: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     if kws.is_empty() {
@@ -1377,7 +1385,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // an empty slot: an idle button, so the others keep their ⌥ keys
             if k.is_empty() {
                 let r = ui.add_enabled_ui(false, |ui| ui.add_sized([bw, 22.0], egui::Button::new(""))).inner;
-                register(ui.ctx(), format!("kwSetEmpty:{}", i + 1), r.rect);
+                register(ui, format!("kwSetEmpty:{}", i + 1), r.rect);
                 if i % 3 == 2 {
                     ui.end_row();
                 }
@@ -1393,11 +1401,11 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     egui::Button::new(egui::RichText::new(short).size(11.5).color(if on { t.text } else { t.text_label })).selected(on).truncate(),
                 )
                 .on_hover_text(format!("{} — ⌥{}", k.replace('|', " › "), i + 1));
-            register(ui.ctx(), format!("kwSet:{}", i + 1), r.rect);
+            register(ui, format!("kwSet:{}", i + 1), r.rect);
             if on {
-                register(ui.ctx(), format!("kwSetOn:{}", i + 1), r.rect);
+                register(ui, format!("kwSetOn:{}", i + 1), r.rect);
             } else if some {
-                register(ui.ctx(), format!("kwSetSome:{}", i + 1), r.rect);
+                register(ui, format!("kwSetSome:{}", i + 1), r.rect);
             }
             if r.clicked() {
                 let _ = app.run("keyword.toggleFromSet", json!({"index": i + 1}));
@@ -1419,7 +1427,7 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(8.0);
         // Named (made by you) and Auto (made by LightCraft) versions
-        let tab_id = egui::Id::new("versions-tab");
+        let tab_id = egui::Id::unique("versions-tab");
         let mut auto: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
         let named_n = p.versions.iter().filter(|v| !v.auto).count();
         let items = [("Named", "named"), ("Auto", "auto")];
@@ -1440,7 +1448,7 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         for (i, v) in shown.into_iter().rev() {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
             crate::widgets::announce(&resp, format!("{} {}", crate::i18n::tr("Version"), i + 1));
-            register(ui.ctx(), format!("version:{i}"), r);
+            register(ui, format!("version:{i}"), r);
             let current = *v.settings == *p.develop;
             if resp.hovered() {
                 ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
@@ -1551,7 +1559,7 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         for (i, h) in p.history.iter().enumerate().rev() {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             crate::widgets::announce(&resp, crate::i18n::tr(&h.label));
-            register(ui.ctx(), format!("history:{i}"), r);
+            register(ui, format!("history:{i}"), r);
             let row = history_row(i, cursor);
             if row == HistoryRow::Current {
                 ui.painter().rect_filled(r, 3.0, t.pressed);

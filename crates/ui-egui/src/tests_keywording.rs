@@ -144,6 +144,19 @@ fn cmd_k_without_a_photo_leaves_the_cursor_alone() {
     assert!(!h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "the box waits for a click");
 }
 
+/// An Add Keywords request the box wasn't drawn for in time (the panel couldn't show) expires: a
+/// later draw of the box leaves the cursor alone.
+#[test]
+fn a_stale_add_keywords_request_leaves_the_cursor_alone() {
+    let (mut h, _) = two_selected();
+    ask(&mut h, "ui.set", json!({"right": "keywords"}));
+    assert!(has(&h, "field:keyword"));
+    h.app.ui.focus_keywords = Some(h.view.ctx.cumulative_pass_nr().saturating_sub(crate::state::FOCUS_KEYWORDS_PASSES + 1));
+    h.step();
+    assert_eq!(h.app.ui.focus_keywords, None, "the request is used up");
+    assert!(!h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:keyword"))), "the box waits for a click");
+}
+
 /// The keyword set's buttons say whether the selection has each keyword, as their ⌥1–⌥9 toggle it
 /// on the selection: on when every selected photo has it, partly on when only some do.
 #[test]

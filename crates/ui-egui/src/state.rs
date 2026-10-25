@@ -271,6 +271,10 @@ pub struct LoupeInfo {
     pub briefly: InfoOverlay,
 }
 
+/// Passes after Add Keywords within which the Add keyword box takes the cursor (the panel may
+/// need a pass to open first).
+pub const FOCUS_KEYWORDS_PASSES: u64 = 2;
+
 /// How long Show Briefly When Photo Changes shows the info overlay (seconds).
 pub const BRIEF_INFO_SECS: f64 = 3.0;
 
@@ -919,10 +923,12 @@ pub struct UiState {
     pub external_edits: Vec<u64>,
     #[serde(skip)]
     pub was_focused: bool,
-    /// When the watched folder was last scanned (egui time).
+    /// When the watched folder was last scanned (monotonic app time, so a hidden window keeps
+    /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
-    /// When the automatic XMP writes that failed were last tried again (egui time), and how many were waiting then.
+    /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
+    /// many were waiting then.
     #[serde(skip)]
     pub sidecar_retry_at: f64,
     #[serde(skip)]
@@ -938,9 +944,11 @@ pub struct UiState {
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
-    /// Put the cursor in the Keywords panel's Add keyword box when it is next drawn (Add Keywords).
+    /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
+    /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
+    /// a request made while the panel can't show expires.
     #[serde(skip)]
-    pub focus_keywords: bool,
+    pub focus_keywords: Option<u64>,
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
@@ -955,7 +963,7 @@ pub struct UiState {
     #[serde(skip)]
     pub sam_downloading: bool,
     /// When to start the zoomed-in detail pass of an AI mask (app time) and which mask: set by
-    /// each click or description, so the pass runs once the clicking stops.
+    /// each click or description, so the pass runs once the clicking stops (monotonic app time).
     #[serde(skip)]
     pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
@@ -1555,7 +1563,7 @@ impl Default for UiState {
             known_cards: None,
             search: String::new(),
             focus_search: false,
-            focus_keywords: false,
+            focus_keywords: None,
             renaming_mask: None,
             describe: None,
             people: None,
