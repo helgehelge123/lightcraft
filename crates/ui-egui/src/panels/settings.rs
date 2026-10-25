@@ -870,8 +870,9 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
-/// which, and the three lines each of Info 1 and Info 2 shows (`view.viewOptions`). Changes apply
-/// as they are made.
+/// which, the three lines each of Info 1 and Info 2 shows, which of them shows briefly when the
+/// photo changes, and whether the loupe shows its loading and rendering message
+/// (`view.viewOptions`). Changes apply as they are made.
 pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
     heading(ui, t, crate::i18n::tr("Loupe View"));
@@ -906,7 +907,15 @@ pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
         if r.clicked() {
             *lines = defaults;
         }
+        // one Info at most shows briefly: ticking one unticks the other
+        let info = if n == 1 { I::Basic } else { I::Exposure };
+        let mut briefly = app.ui.settings.loupe_info.briefly == info;
+        if check(ui, &format!("viewOptions.briefly{n}"), &mut briefly, "Show briefly when photo changes") {
+            app.ui.settings.loupe_info.briefly = if briefly { info } else { I::Off };
+        }
     }
+    heading(ui, t, crate::i18n::tr("General"));
+    check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
 }
 
 // ----------------------------------------------------------------------------------- Slideshow
@@ -972,6 +981,11 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::slideshow::{FADE_MAX, SLIDE_MAX, SLIDE_MIN};
     heading(ui, t, crate::i18n::tr("Playback"));
     let s = app.session.slideshow.clone();
+    let mut v = s.manual;
+    if check(ui, "settings.slideshowManual", &mut v, "Manual slideshow") {
+        let _ = app.run("slideshow.playback", json!({"manual": v}));
+    }
+    hint(ui, t, crate::i18n::tr("A manual slideshow shows each slide until → or ← changes it. Exports still use the slide duration."));
     row(ui, t, crate::i18n::tr("Slide duration"), |ui| {
         duration_slider(app, ui, "slideshowSlide", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
     });
@@ -1343,6 +1357,7 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     // or failed switch reopens the same catalog, so its pins stay).
     app.ui.reference = None;
     app.ui.compare = None;
+    app.ui.brief_info = crate::state::BriefInfo::default();
     if app.ui.view == crate::state::ViewMode::Reference {
         app.ui.view = crate::state::ViewMode::PhotoGrid;
     }
