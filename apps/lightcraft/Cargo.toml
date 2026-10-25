@@ -55,3 +55,6 @@ objc2-foundation = { workspace = true }
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+craft-update = { workspace = true }
