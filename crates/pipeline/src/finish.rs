@@ -29,31 +29,20 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
         return None;
     }
     const N: usize = 1024;
-    let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
-    let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
-    let mut base = Lut1::from_fn(N, |x| {
-        let mut d = 0.0;
-        for (a, b, amt) in regions {
-            if amt == 0.0 {
-                continue;
-            }
-            let (ctr, half) = ((a + b) / 2.0, (b - a) * 0.75 + 0.05);
-            let t = ((x - ctr) / half).clamp(-1.0, 1.0);
-            let win = 0.5 + 0.5 * (t * std::f32::consts::PI).cos();
-            d += (amt / 100.0) as f32 * 0.22 * win;
-        }
-        (x + d * 4.0 * x * (1.0 - x)).clamp(0.0, 1.0)
-    });
-    // keep monotone
-    for i in 1..N {
-        base.v[i] = base.v[i].max(base.v[i - 1]);
-    }
+    let mut base = crate::curve::ParametricCurve::new(c).to_lut();
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
         base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
     }
     let per = [&c.red, &c.green, &c.blue];
-    Some(std::array::from_fn(|i| if chans[i] { MonotoneCurve::new(&to_pts(per[i])).to_lut(N).compose(&base) } else { base.clone() }))
+    Some(std::array::from_fn(|i| {
+        if chans.get(i).copied().unwrap_or(false) {
+            let pts = per.get(i).map(|&p| to_pts(p)).unwrap_or_default();
+            MonotoneCurve::new(&pts).to_lut(N).compose(&base)
+        } else {
+            base.clone()
+        }
+    }))
 }
 
 /// Vignette (post-crop) parameters.
