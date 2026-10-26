@@ -893,7 +893,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.tool.clear();
                 }
                 let _ = app.session.end_interaction();
-            } else {
+            } else if app.ui.right == RightPanel::None {
                 let p = match std::mem::take(&mut app.ui.right_hidden) {
                     RightPanel::None => RightPanel::Edit,
                     p => p,
@@ -906,6 +906,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.tool = "remove".into();
                 }
             }
+            // A right panel that is open but not showing (minimized, or behind another tab)
+            // keeps its mode; reveal_command brings it to the front.
             Ok(json!({"open": app.ui.right != RightPanel::None}))
         }
         "view.beforeAfter" => {

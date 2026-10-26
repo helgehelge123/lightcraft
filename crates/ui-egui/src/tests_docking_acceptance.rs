@@ -45,6 +45,30 @@ fn release(h: &mut Headless, pos: egui::Pos2) {
 }
 
 #[test]
+fn window_menu_reopens_closed_panels_in_their_dock_columns() {
+    use craft_ui::docking::Side;
+    let mut h = app();
+    let columns = |h: &Headless, side| {
+        crate::docking::columns(h.app.ui.docking.as_ref().unwrap(), side).into_iter().map(|(_, groups)| groups).collect::<Vec<_>>()
+    };
+    let end = vec![vec![vec![Panel::Tools]], vec![vec![Panel::Presets]]];
+    h.app.run("panel.presets", json!({})).unwrap();
+    h.step();
+    assert_eq!(columns(&h, Side::End), end, "Presets opens on Tools' photo side");
+    dock(&mut h, json!({"operation":"close","panel":"tools"}));
+    assert_eq!(h.app.ui.right, RightPanel::None);
+    h.app.run("panel.edit", json!({})).unwrap();
+    h.step();
+    assert_eq!(columns(&h, Side::End), end, "Tools reopens at the window edge");
+    let width = crate::docking::columns(h.app.ui.docking.as_ref().unwrap(), Side::Start).first().unwrap().0;
+    dock(&mut h, json!({"operation":"close","panel":"library"}));
+    assert!(!h.app.ui.left_panel);
+    h.app.run("view.leftPanel", json!({})).unwrap();
+    h.step();
+    assert_eq!(crate::docking::columns(h.app.ui.docking.as_ref().unwrap(), Side::Start), [(width, vec![vec![Panel::Library]])]);
+}
+
+#[test]
 fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
     let mut h = app();
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"library","zone":"center"}));
@@ -53,7 +77,7 @@ fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
         let undo = h.app.session.undo.len();
         let photos = serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap();
         h.app.run(command, json!({})).unwrap();
-        assert!(h.app.ui.docking.as_ref().unwrap().exposed(Panel::Tools), "{command}");
+        assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools), "{command}");
         assert_ne!(h.app.ui.right, RightPanel::None);
         assert_eq!(h.app.session.undo.len(), undo);
         assert_eq!(serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap(), photos);
@@ -64,10 +88,10 @@ fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
     dock(&mut h, json!({"operation":"move","panel":"presets","target":"library","zone":"center"}));
     dock(&mut h, json!({"operation":"activate","panel":"library"}));
     h.app.run("panel.presets", json!({})).unwrap();
-    assert!(h.app.ui.docking.as_ref().unwrap().exposed(Panel::Presets));
+    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Presets));
     dock(&mut h, json!({"operation":"activate","panel":"library"}));
     dock(&mut h, json!({"operation":"open","panel":"presets"}));
-    assert!(h.app.ui.docking.as_ref().unwrap().exposed(Panel::Presets));
+    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Presets));
 }
 
 #[test]
@@ -81,7 +105,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"presets","zone":"center"}));
     dock(&mut h, json!({"operation":"activate","panel":"presets"}));
     assert_eq!(h.app.ui.right, RightPanel::Crop);
-    assert!(!h.app.ui.docking.as_ref().unwrap().exposed(Panel::Tools));
+    assert!(!crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools));
     let library = h.app.ui.docking.as_ref().unwrap().layout.location(&Panel::Library).unwrap();
     let id = h.app.session.active().unwrap();
     let photo = serde_json::to_value(h.app.session.catalog.photo(id).unwrap().as_ref()).unwrap();
@@ -94,7 +118,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     }
     assert_eq!(h.app.ui.right, RightPanel::Edit, "the real Canvas double-click completes Crop");
     let workspace = h.app.ui.docking.as_ref().unwrap();
-    assert!(workspace.exposed(Panel::Tools), "tool.done reveals Tools after the Canvas callback");
+    assert!(crate::docking::exposed_in(workspace, Panel::Tools), "tool.done reveals Tools after the Canvas callback");
     assert_eq!(workspace.layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Presets));
     assert_eq!(workspace.layout.location(&Panel::Library).unwrap(), library);
     assert_eq!(h.app.session.active(), Some(id));
@@ -271,8 +295,8 @@ fn covered_keyword_rejects_hierarchy_move_and_uncovered_target_moves_exact_keywo
 #[test]
 fn reset_during_held_divider_drag_keeps_replacement_layout_on_later_movement() {
     let mut h = app();
-    let divider = egui::Id::unique("lightcraft-docking").with(("split", Vec::<bool>::new()));
-    let from = h.view.ctx.read_response(divider).expect("the custom workspace root divider is rendered").rect.center();
+    let divider = egui::Id::unique("lightcraft-docking").with(("column-resize", Some(Panel::Library)));
+    let from = h.view.ctx.read_response(divider).expect("the Library column's divider is rendered").rect.center();
     let before = h.app.ui.docking.as_ref().unwrap().layout.clone();
     h.app.synthetic.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.step();
@@ -303,7 +327,7 @@ fn reset_during_held_divider_drag_keeps_replacement_layout_on_later_movement() {
 
 fn held_divider_replacement_route(route: &str) {
     let mut h = app();
-    let divider = egui::Id::unique("lightcraft-docking").with(("split", Vec::<bool>::new()));
+    let divider = egui::Id::unique("lightcraft-docking").with(("column-resize", Some(Panel::Library)));
     let from = h.view.ctx.read_response(divider).unwrap().rect.center();
     let photos = serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap();
     h.app.synthetic.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
