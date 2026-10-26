@@ -836,7 +836,7 @@ fn people_chooser(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
             let on = i == pick.person;
             let resp = ui.add(egui::Button::selectable(on, name).truncate().min_size(vec2(ui.available_width(), 22.0)));
             crate::widgets::announce_selected(&resp, name.clone(), on);
-            register(ui.ctx(), format!("maskPerson:{i}"), resp.rect);
+            register(ui, format!("maskPerson:{i}"), resp.rect);
             if resp.clicked() {
                 pick.person = i;
             }
@@ -844,7 +844,7 @@ fn people_chooser(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
         ui.horizontal_wrapped(|ui| {
             for (k, part) in PEOPLE_PARTS.iter().enumerate() {
                 let r = ui.checkbox(&mut pick.parts[k], crate::i18n::tr(part));
-                register(ui.ctx(), format!("check:maskPeoplePart{k}"), r.rect);
+                register(ui, format!("check:maskPeoplePart{k}"), r.rect);
             }
         });
         let go = match pick.op.as_str() {
@@ -972,7 +972,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         start_describe(app, op);
     }
     let b = ui.button(crate::i18n::tr("People…"));
-    register(ui.ctx(), format!("maskComp:{op}:people"), b.rect);
+    register(ui, format!("maskComp:{op}:people"), b.rect);
     if b.clicked() {
         start_people(app, op);
     }
