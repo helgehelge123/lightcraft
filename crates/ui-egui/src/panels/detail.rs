@@ -2678,12 +2678,12 @@ fn brush_in_use(app: &LightcraftApp, right: RightPanel) -> bool {
 /// As in Lightroom, a smooth-scrolling mouse and a two-finger trackpad swipe do the same (a line's
 /// worth of points a notch) instead of zooming or panning; pinch and ⌘-wheel still zoom.
 fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel) {
-    let id = egui::Id::new("brush-wheel");
+    let id = egui::Id::unique("brush-wheel");
     let now = ui.input(|i| i.time);
     // the spot under the pointer now (last frame's outlines, this frame's pointer: it may have moved with the wheel)
     // with each spot's radius as it is now: the wheel may have just resized it
     let hovered = ui
-        .data(|d| d.get_temp::<SpotBodies>(egui::Id::new(SPOT_BODIES)))
+        .data(|d| d.get_temp::<SpotBodies>(egui::Id::unique(SPOT_BODIES)))
         .filter(|_| right == RightPanel::Remove)
         .and_then(|mut b| {
             let spots = app.session.active().and_then(|p| app.session.develop_of(p)).map(|d| d.spots.clone()).unwrap_or_default();
@@ -2697,7 +2697,7 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
         .map(|(index, ..)| index);
     let in_use = brush_in_use(app, right) && resp.hovered();
     // one wheel gesture on a spot is one undo step: it ends after a pause, off that spot, or when the tool goes
-    if let Some((spot, last)) = ui.data(|d| d.get_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))) {
+    if let Some((spot, last)) = ui.data(|d| d.get_temp::<(usize, f64)>(egui::Id::unique(WHEEL_EDIT))) {
         let pressed = ui.input(|i| i.pointer.any_down());
         if !in_use || pressed || hovered != Some(spot) || now - last > WHEEL_EDIT_PAUSE {
             end_wheel_edit(app, ui.ctx());
@@ -2739,10 +2739,10 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
                 if app.session.active_spot != Some(index) {
                     let _ = app.run("spot.select", json!({"index": index}));
                 }
-                if ui.data(|d| d.get_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))).is_none() {
+                if ui.data(|d| d.get_temp::<(usize, f64)>(egui::Id::unique(WHEEL_EDIT))).is_none() {
                     let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
                 }
-                ui.data_mut(|d| d.insert_temp(egui::Id::new(WHEEL_EDIT), (index, now)));
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique(WHEEL_EDIT), (index, now)));
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_EDIT_PAUSE));
                 let mut p = json!({"index": index});
                 if k != 1.0 {
@@ -2775,7 +2775,7 @@ const WHEEL_EDIT_PAUSE: f64 = 0.5;
 
 /// Commits a wheel gesture's spot edits as one undo step.
 fn end_wheel_edit(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if ctx.data_mut(|d| d.remove_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))).is_some() && app.session.interaction.is_some() {
+    if ctx.data_mut(|d| d.remove_temp::<(usize, f64)>(egui::Id::unique(WHEEL_EDIT))).is_some() && app.session.interaction.is_some() {
         let _ = app.run("develop.endInteraction", json!({}));
     }
 }
@@ -2783,7 +2783,7 @@ fn end_wheel_edit(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// Every frame, whatever is drawn: ends a wheel gesture whose loupe is gone (another view, another
 /// tool), which `brush_wheel` no longer runs to end, or that has paused, so no later edit joins it.
 pub(crate) fn settle_wheel_edit(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some((_, last)) = ctx.data(|d| d.get_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))) else { return };
+    let Some((_, last)) = ctx.data(|d| d.get_temp::<(usize, f64)>(egui::Id::unique(WHEEL_EDIT))) else { return };
     let drawn = app.ui.view == ViewMode::Detail && app.ui.right == RightPanel::Remove && !app.ui.fullscreen;
     if !drawn || ctx.input(|i| i.time) - last > WHEEL_EDIT_PAUSE {
         end_wheel_edit(app, ctx);
@@ -2801,7 +2801,7 @@ fn deselect_spot(app: &mut LightcraftApp, right: RightPanel) {
 /// Photoshop does: across for the size, up and down for the feather (down: softer), shown on the
 /// circle where the drag started. True while it owns the pointer (nothing is painted).
 fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel, map: &CanvasMap) -> bool {
-    let id = egui::Id::new("brush-resize");
+    let id = egui::Id::unique("brush-resize");
     if !brush_in_use(app, right) {
         ui.data_mut(|d| d.remove_temp::<(Pos2, f32, f32)>(id));
         return false;
@@ -2942,7 +2942,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     let hit = |q: Pos2| spot_under(&bodies, active, q);
     let hover = resp.hover_pos().and_then(hit);
     // the mouse wheel resizes the spot under the pointer instead of the brush (`brush_wheel`, next frame)
-    ui.data_mut(|m| m.insert_temp(egui::Id::new(SPOT_BODIES), SpotBodies { bodies: bodies.clone(), active, long }));
+    ui.data_mut(|m| m.insert_temp(egui::Id::unique(SPOT_BODIES), SpotBodies { bodies: bodies.clone(), active, long }));
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);

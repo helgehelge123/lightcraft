@@ -89,7 +89,13 @@ fn a_stroke_is_grabbed_anywhere_along_it() {
 }
 
 fn wheel(h: &mut Headless, dy: f32, modifiers: egui::Modifiers) {
-    h.events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers });
+    h.events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers,
+    });
     h.step();
 }
 
@@ -124,6 +130,7 @@ fn a_smooth_scrolling_mouse_sizes_the_brush_too() {
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, y),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers,
         });
         h.step();
