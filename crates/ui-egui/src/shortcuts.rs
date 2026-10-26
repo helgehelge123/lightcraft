@@ -929,6 +929,24 @@ mod tests {
         assert_eq!(h.app.ui.right, RightPanel::Edit);
     }
 
+    /// F8 on a minimized Tools window opens it again in the mode it had.
+    #[test]
+    fn classic_f8_shows_a_minimized_tools_window_and_keeps_its_mode() {
+        use crate::{docking::Panel, state::RightPanel};
+        let mut h = library();
+        h.app.ui.view = crate::state::ViewMode::Detail;
+        h.app.ui.right = RightPanel::Edit;
+        h.settle(std::time::Duration::from_secs(10));
+        h.app.run("ui.dock", json!({"operation": "float", "panel": "tools", "rect": [400, 100, 320, 500]})).unwrap();
+        h.app.run("ui.dock", json!({"action": {"SetMinimized": {"panel": "tools", "minimized": true}}})).unwrap();
+        h.app.ui.right = RightPanel::Crop;
+        h.step();
+        assert!(!crate::docking::exposed(&h.app, Panel::Tools));
+        key(&mut h, "F8", false);
+        assert_eq!(h.app.ui.right, RightPanel::Crop);
+        assert!(crate::docking::exposed(&h.app, Panel::Tools), "the window opens");
+    }
+
     #[test]
     fn shift_culling_keys_advance_exactly_once() {
         use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
