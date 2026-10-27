@@ -481,7 +481,12 @@ impl WebApp {
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
         let ui_written = files.get("ui.json").unwrap_or_default();
-        if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
+        // an arrangement from an older docking version starts again from the default
+        let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
+        if let Some(fields) = saved.as_object_mut() {
+            lightcraft_ui_egui::docking::drop_outdated(fields);
+        }
+        if let Ok(ui) = serde_json::from_value::<UiState>(saved) {
             app.ui = ui;
         }
         app.ui = app.ui.sanitized();
