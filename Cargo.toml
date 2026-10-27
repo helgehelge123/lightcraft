@@ -10,9 +10,10 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f", features = ["serde"] }
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184", features = ["egui"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "1e6f127844ec61b3b8afdcc2bb76e7cfe470153f", features = ["serde"] }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "1e6f127844ec61b3b8afdcc2bb76e7cfe470153f" }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1e6f127844ec61b3b8afdcc2bb76e7cfe470153f", features = ["egui"] }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "1e6f127844ec61b3b8afdcc2bb76e7cfe470153f", features = ["egui"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
@@ -62,7 +63,7 @@ dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and h
 
 # formats
 quick-xml = "0.41"
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 
 # codecs
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
