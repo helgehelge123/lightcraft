@@ -9,40 +9,11 @@ use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
-/// double-click zooms or restores it. Registered before the bar's widgets so they win the click.
-fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, bar: Rect, search_rect: Rect) {
-    use crate::titlebar::{Gesture, WindowState, command_for};
+/// double-click acts as the system setting says. Made before the bar's widgets so they win the click.
+fn window_handle(ui: &mut egui::Ui, bar: Rect) {
     register(ui, "region:titlebar", bar);
-    let handle = egui::Id::unique("titlebar-handle");
-    let resp = ui.interact(bar, handle, Sense::click_and_drag());
+    let resp = craft_window::title_bar::empty_area(ui, bar);
     crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
-    // a press that began on a button or the search field is theirs: dragging off it must not move the window
-    // (while pressing, egui hovers every widget under the pointer; once the drag starts, only the dragged one)
-    let ctx = ui.ctx().clone();
-    let memo = egui::Id::unique("titlebar-press-on-widget");
-    if resp.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_pressed()) {
-        let hovered = ctx.interaction_snapshot(|s| s.hovered.clone());
-        let on_widget =
-            hovered.iter().any(|id| *id != handle && ctx.read_response(*id).is_some_and(|r| r.sense.senses_click() || r.sense.senses_drag()));
-        ctx.data_mut(|d| d.insert_temp(memo, on_widget));
-    }
-    let on_widget = ctx.data(|d| d.get_temp::<bool>(memo)).unwrap_or(false);
-    // The search field is drawn after this handle. Its hit-test response may not exist
-    // yet when the press is recorded; the press origin still identifies text selection.
-    let on_search = ui.input(|i| i.pointer.press_origin().is_some_and(|p| search_rect.contains(p)));
-    let gesture = if resp.double_clicked_by(egui::PointerButton::Primary) && !on_search {
-        Some(Gesture::DoubleClicked)
-    } else if resp.drag_started_by(egui::PointerButton::Primary) && !on_widget && !on_search {
-        Some(Gesture::DragStarted)
-    } else {
-        None
-    };
-    if let Some(g) = gesture {
-        let window = WindowState { maximized: ui.input(|i| i.viewport().maximized).unwrap_or(false), fullscreen: app.window_is_fullscreen };
-        if let Some(cmd) = command_for(g, window) {
-            ui.ctx().send_viewport_cmd(cmd);
-        }
-    }
 }
 
 /// Draw the top bar: the titlebar drag area, the in-window menus when there is no native menu
@@ -78,7 +49,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let search_left = bar.center().x - sw / 2.0;
             let sr = Rect::from_center_size(pos2(bar.center().x, full.center().y), vec2(sw, 28.0));
             if app.integrated_titlebar {
-                window_handle(app, ui, bar, sr);
+                window_handle(ui, bar);
             }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
