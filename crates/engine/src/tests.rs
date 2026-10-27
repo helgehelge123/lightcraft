@@ -2,6 +2,53 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+mod album_order;
+mod album_remove;
+mod albums_local;
+mod color;
+mod constrain_crop;
+mod crop_angle;
+mod crop_aspect;
+mod denoise;
+mod export;
+mod face_models;
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod face_recognize;
+#[cfg(not(target_arch = "wasm32"))]
+mod face_tiles;
+mod filesystem_history;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod focus_scan;
+mod folders;
+mod forget_local;
+mod history_cursor;
+mod hold_view;
+mod ids_params;
+mod import;
+mod import_move;
+mod keyword_list;
+mod libops;
+mod library;
+mod lightroom_folder;
+mod mask_effects;
+mod merge;
+mod move_to_share;
+mod organize;
+mod persist;
+mod prefs;
+mod presets_scale;
+mod print;
+mod process;
+mod recheck;
+mod segment;
+mod settings_files;
+mod slide;
+mod slideshow_export;
+mod spots;
+mod sync;
+mod view_follow;
+pub(super) mod xmp;
+
 fn demo() -> Session {
     Session::with_demo()
 }
