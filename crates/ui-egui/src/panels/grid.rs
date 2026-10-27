@@ -1,7 +1,6 @@
 //! Photo Grid (justified rows) and Square Grid. Virtualized: only visible cells request thumbnails.
 
 #[cfg(test)]
-#[path = "grid_header_tests.rs"]
 mod header_tests;
 
 use std::collections::{HashMap, HashSet};
