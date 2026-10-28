@@ -83,3 +83,6 @@ mod view_cost;
 mod wb_selector;
 mod zoom;
 mod zoom_keys;
+
+pub(super) mod fixtures;
+pub(super) mod render_fixtures;

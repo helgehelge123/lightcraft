@@ -1,6 +1,7 @@
 use super::geometry::CanvasMap;
 use super::retouch::{SPOT_BODIES, SpotBodies, brush_circles, feather_band, grab_radius, spot_band, spot_under};
-use super::*;
+use super::{Color32, LightcraftApp, Pos2, Rect, RightPanel, json, vec2};
+use crate::state::ViewMode;
 
 // ------------------------------------------------------------------------ brush by mouse
 
