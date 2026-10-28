@@ -86,6 +86,9 @@ enum Target {
     Nowhere,
 }
 
+/// Where the pointer is over the panel, and what a drop there would do (with the line marking it).
+type Drop = Option<(Target, Option<Rect>)>;
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().id_salt("bursts-scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -95,7 +98,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let shown = bursts(app);
         let dragged: Option<Vec<PhotoId>> = app.ui.dragging_photos.as_ref().map(|v| v.iter().copied().map(PhotoId).collect());
         let pointer = ui.input(|i| i.pointer.latest_pos()).filter(|p| ui.clip_rect().contains(*p));
-        let mut target: Option<(Target, Option<Rect>)> = None;
+        let mut target: Drop = None;
         let width = ui.available_width();
         let explain = if shown.is_empty() {
             "Photo → Assisted Culling… groups look-alike shots into bursts. They show here to put right by hand."
@@ -106,75 +109,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.set_width(width - 2.0 * INSET);
             ui.label(egui::RichText::new(crate::i18n::tr(explain)).color(t.text_dim).size(12.0));
         });
-        let cols = (((width - 2.0 * INSET + GAP) / (CELL + GAP)).floor() as usize).max(1);
         for (k, (g, photos)) in shown.iter().enumerate() {
-            // the title: a drop there puts the photos last; dragged, it takes the burst along
-            let (title, resp) = ui.allocate_exact_size(vec2(width, TITLE_H), Sense::click_and_drag());
-            register(ui, format!("burst:{g}"), title);
-            let p = ui.painter();
-            let name = format!("{} {}", crate::i18n::tr("Burst"), k + 1);
-            p.text(pos2(title.left() + INSET, title.center().y), Align2::LEFT_CENTER, name, t.semibold(12.5), t.text);
-            let n = photos.len();
-            let count = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
-            p.text(pos2(title.right() - INSET, title.center().y), Align2::RIGHT_CENTER, count, t.font(11.5), t.text_dim);
-            if resp.hovered() && dragged.is_none() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
-            // the whole burst, also its photos out of view
-            if resp.drag_started() {
-                app.ui.dragging_photos = Some(all_bursts(app).get(g).map(|m| m.iter().map(|p| p.0).collect()).unwrap_or_default());
-            }
-            if pointer.is_some_and(|p| title.contains(p)) {
-                target = Some((Target::Burst(*g, LAST, false), None));
-            }
-            // the photos, in rows
-            let rows = n.div_ceil(cols);
-            let (area, _) = ui.allocate_exact_size(vec2(width, rows as f32 * (CELL + GAP) + GAP), Sense::hover());
-            let cell_at = |i: usize| {
-                let (r, c) = (i / cols, i % cols);
-                Rect::from_min_size(pos2(area.left() + INSET + c as f32 * (CELL + GAP), area.top() + r as f32 * (CELL + GAP)), vec2(CELL, CELL))
-            };
-            for (i, id) in photos.iter().enumerate() {
-                let r = cell_at(i);
-                if let Some(badge) = photo_cell(app, ui, *id, r) {
-                    register(ui, format!("burstPick:{g}"), badge);
-                }
-                // a drop on a photo's left half goes before it, on its right half after it
-                if let Some(p) = pointer
-                    && r.expand(GAP / 2.0).contains(p)
-                {
-                    let slot = if p.x < r.center().x { i } else { i + 1 };
-                    let edge = if slot == i { r.left() - GAP / 2.0 } else { r.right() + GAP / 2.0 };
-                    target = Some((Target::Burst(*g, slot, slot == i), Some(Rect::from_min_max(pos2(edge - 1.5, r.top()), pos2(edge + 1.5, r.bottom())))));
-                }
-            }
-            if target.is_none()
-                && let Some(p) = pointer
-                && area.contains(p)
-            {
-                // the room after the last photo: last
-                let last = cell_at(n.saturating_sub(1));
-                target = Some((Target::Burst(*g, LAST, false), Some(Rect::from_min_max(pos2(last.right() + GAP / 2.0 - 1.5, last.top()), pos2(last.right() + GAP / 2.0 + 1.5, last.bottom())))));
-            }
-            if dragged.is_some() && matches!(target, Some((Target::Burst(tg, ..), _)) if tg == *g) {
-                ui.painter().rect_stroke(title.union(area).shrink2(vec2(8.0, 1.0)), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);
-            }
+            burst_rows(app, ui, &t, (k, *g, photos), pointer, dragged.is_some(), &mut target);
         }
         // drop places for a new burst and for none: there while there are bursts, or a drag
         if !shown.is_empty() || dragged.is_some() {
-            ui.add_space(8.0);
-            for (key, label, tgt) in [("burst:new", "New burst", Target::New), ("burst:none", "Not in a burst", Target::Nowhere)] {
-                let (row, _) = ui.allocate_exact_size(vec2(width, 40.0), Sense::hover());
-                let zone = row.shrink2(vec2(INSET, 4.0));
-                register(ui, key, zone);
-                let over = dragged.is_some() && pointer.is_some_and(|p| zone.contains(p));
-                let stroke = if over { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.divider) };
-                ui.painter().rect_stroke(zone, 6.0, stroke, StrokeKind::Inside);
-                ui.painter().text(zone.center(), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(12.0), if over { t.text } else { t.text_dim });
-                if over {
-                    target = Some((tgt, None));
-                }
-            }
+            drop_zones(ui, &t, pointer, dragged.is_some(), &mut target);
         }
         if let Some(ids) = dragged
             && let Some((tgt, mark)) = target
@@ -183,6 +123,108 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         ui.add_space(12.0);
     });
+}
+
+/// Burst `g` (the `k`th shown): its title, then its photos in rows. Sets `target` when the pointer
+/// is over it.
+fn burst_rows(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    (k, g, photos): (usize, u32, &[PhotoId]),
+    pointer: Option<egui::Pos2>,
+    dragging: bool,
+    target: &mut Drop,
+) {
+    let width = ui.available_width();
+    let cols = (((width - 2.0 * INSET + GAP) / (CELL + GAP)).floor() as usize).max(1);
+    let title = burst_title(app, ui, t, (k, g, photos.len()), pointer, dragging, target);
+    let n = photos.len();
+    // the photos, in rows
+    let rows = n.div_ceil(cols);
+    let (area, _) = ui.allocate_exact_size(vec2(width, rows as f32 * (CELL + GAP) + GAP), Sense::hover());
+    let cell_at = |i: usize| {
+        let (r, c) = (i / cols, i % cols);
+        Rect::from_min_size(pos2(area.left() + INSET + c as f32 * (CELL + GAP), area.top() + r as f32 * (CELL + GAP)), vec2(CELL, CELL))
+    };
+    for (i, id) in photos.iter().enumerate() {
+        let r = cell_at(i);
+        if let Some(badge) = photo_cell(app, ui, *id, r) {
+            register(ui, format!("burstPick:{g}"), badge);
+        }
+        // a drop on a photo's left half goes before it, on its right half after it
+        if let Some(p) = pointer
+            && r.expand(GAP / 2.0).contains(p)
+        {
+            let slot = if p.x < r.center().x { i } else { i + 1 };
+            let edge = if slot == i { r.left() - GAP / 2.0 } else { r.right() + GAP / 2.0 };
+            *target = Some((Target::Burst(g, slot, slot == i), Some(Rect::from_min_max(pos2(edge - 1.5, r.top()), pos2(edge + 1.5, r.bottom())))));
+        }
+    }
+    if target.is_none()
+        && let Some(p) = pointer
+        && area.contains(p)
+    {
+        // the room after the last photo: last
+        let last = cell_at(n.saturating_sub(1));
+        *target = Some((
+            Target::Burst(g, LAST, false),
+            Some(Rect::from_min_max(pos2(last.right() + GAP / 2.0 - 1.5, last.top()), pos2(last.right() + GAP / 2.0 + 1.5, last.bottom()))),
+        ));
+    }
+    if dragging && matches!(target, Some((Target::Burst(tg, ..), _)) if *tg == g) {
+        ui.painter().rect_stroke(title.union(area).shrink2(vec2(8.0, 1.0)), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);
+    }
+}
+
+/// Burst `g`'s title (the `k`th shown, of `n` photos): a drop there puts the photos last;
+/// dragged, it takes the burst along.
+fn burst_title(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    (k, g, n): (usize, u32, usize),
+    pointer: Option<egui::Pos2>,
+    dragging: bool,
+    target: &mut Drop,
+) -> Rect {
+    let width = ui.available_width();
+    let (title, resp) = ui.allocate_exact_size(vec2(width, TITLE_H), Sense::click_and_drag());
+    register(ui, format!("burst:{g}"), title);
+    let p = ui.painter();
+    let name = format!("{} {}", crate::i18n::tr("Burst"), k + 1);
+    p.text(pos2(title.left() + INSET, title.center().y), Align2::LEFT_CENTER, name, t.semibold(12.5), t.text);
+    let count = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
+    p.text(pos2(title.right() - INSET, title.center().y), Align2::RIGHT_CENTER, count, t.font(11.5), t.text_dim);
+    if resp.hovered() && !dragging {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    // the whole burst, also its photos out of view
+    if resp.drag_started() {
+        app.ui.dragging_photos = Some(all_bursts(app).get(&g).map(|m| m.iter().map(|p| p.0).collect()).unwrap_or_default());
+    }
+    if pointer.is_some_and(|p| title.contains(p)) {
+        *target = Some((Target::Burst(g, LAST, false), None));
+    }
+    title
+}
+
+/// The drop places for a new burst and for none. Sets `target` when a drag is over one.
+fn drop_zones(ui: &mut egui::Ui, t: &Tokens, pointer: Option<egui::Pos2>, dragging: bool, target: &mut Drop) {
+    let width = ui.available_width();
+    ui.add_space(8.0);
+    for (key, label, tgt) in [("burst:new", "New burst", Target::New), ("burst:none", "Not in a burst", Target::Nowhere)] {
+        let (row, _) = ui.allocate_exact_size(vec2(width, 40.0), Sense::hover());
+        let zone = row.shrink2(vec2(INSET, 4.0));
+        register(ui, key, zone);
+        let over = dragging && pointer.is_some_and(|p| zone.contains(p));
+        let stroke = if over { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.divider) };
+        ui.painter().rect_stroke(zone, 6.0, stroke, StrokeKind::Inside);
+        ui.painter().text(zone.center(), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(12.0), if over { t.text } else { t.text_dim });
+        if over {
+            *target = Some((tgt, None));
+        }
+    }
 }
 
 /// One photo of a burst: its thumbnail, the pick's badge (returned), the active photo's outline;
