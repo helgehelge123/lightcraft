@@ -1,6 +1,8 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
+use super::source::{
+    DecodedSource, PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket,
+};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
 impl crate::Session {
