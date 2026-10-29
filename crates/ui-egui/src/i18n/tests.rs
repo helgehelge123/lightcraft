@@ -405,22 +405,7 @@ fn string_literals(src: &str) -> Vec<(usize, String)> {
                 i += 1;
             }
         } else if c == '/' && at(i + 1) == '*' {
-            let mut nested = 0;
-            while i < chars.len() {
-                if chars[i] == '/' && at(i + 1) == '*' {
-                    nested += 1;
-                    i += 2;
-                } else if chars[i] == '*' && at(i + 1) == '/' {
-                    nested -= 1;
-                    i += 2;
-                    if nested == 0 {
-                        break;
-                    }
-                } else {
-                    line += usize::from(chars[i] == '\n');
-                    i += 1;
-                }
-            }
+            skip_block_comment(&chars, &mut i, &mut line);
         } else if let Some(start) = cfg_start(i) {
             // `#[cfg(test)]` (spaces allowed) and `#[cfg(all(test, …))]` mark the next item as test
             // code up to its `;` or through its body, `#![cfg(test)]` the rest of the file;
@@ -458,36 +443,8 @@ fn string_literals(src: &str) -> Vec<(usize, String)> {
                 out.push((first, text));
             }
         } else if c == '"' {
-            let (first, mut text) = (line, String::new());
-            i += 1;
-            while i < chars.len() && chars[i] != '"' {
-                if chars[i] == '\\' {
-                    match at(i + 1) {
-                        '\n' => {
-                            line += 1;
-                            i += 2;
-                            while at(i).is_whitespace() {
-                                line += usize::from(at(i) == '\n');
-                                i += 1;
-                            }
-                        }
-                        'u' => {
-                            let hex: String = chars[i + 3..].iter().take_while(|&&h| h != '}').collect();
-                            text.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
-                            i += 4 + hex.len();
-                        }
-                        escaped => {
-                            text.push(escaped);
-                            i += 2;
-                        }
-                    }
-                } else {
-                    line += usize::from(chars[i] == '\n');
-                    text.push(chars[i]);
-                    i += 1;
-                }
-            }
-            i += 1;
+            let first = line;
+            let text = quoted_literal(&chars, &mut i, &mut line);
             if test_depth.is_none() && !pending_test {
                 out.push((first, text));
             }
@@ -522,6 +479,64 @@ fn string_literals(src: &str) -> Vec<(usize, String)> {
         }
     }
     out
+}
+
+/// Skips the block comment (nested ones too) that starts at `chars[*i]`, counting its lines.
+fn skip_block_comment(chars: &[char], i: &mut usize, line: &mut usize) {
+    let at = |k: usize| chars.get(k).copied().unwrap_or('\0');
+    let mut nested = 0;
+    while *i < chars.len() {
+        if chars[*i] == '/' && at(*i + 1) == '*' {
+            nested += 1;
+            *i += 2;
+        } else if chars[*i] == '*' && at(*i + 1) == '/' {
+            nested -= 1;
+            *i += 2;
+            if nested == 0 {
+                break;
+            }
+        } else {
+            *line += usize::from(chars[*i] == '\n');
+            *i += 1;
+        }
+    }
+}
+
+/// The text of the `"…"` literal that starts at `chars[*i]`, with `\u{…}`, line continuations and
+/// other escapes decoded; `*i` ends past its closing quote.
+fn quoted_literal(chars: &[char], i: &mut usize, line: &mut usize) -> String {
+    let at = |k: usize| chars.get(k).copied().unwrap_or('\0');
+    let mut text = String::new();
+    *i += 1;
+    while *i < chars.len() && chars[*i] != '"' {
+        if chars[*i] != '\\' {
+            *line += usize::from(chars[*i] == '\n');
+            text.push(chars[*i]);
+            *i += 1;
+            continue;
+        }
+        match at(*i + 1) {
+            '\n' => {
+                *line += 1;
+                *i += 2;
+                while at(*i).is_whitespace() {
+                    *line += usize::from(at(*i) == '\n');
+                    *i += 1;
+                }
+            }
+            'u' => {
+                let hex: String = chars[*i + 3..].iter().take_while(|&&h| h != '}').collect();
+                text.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                *i += 4 + hex.len();
+            }
+            escaped => {
+                text.push(escaped);
+                *i += 2;
+            }
+        }
+    }
+    *i += 1;
+    text
 }
 
 #[test]
