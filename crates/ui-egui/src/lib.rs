@@ -6,6 +6,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// LightCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.lightcraft.png")),
+    accent: Some([0xf2, 0xa5, 0x16]),
+    ..craft_update::suite::LIGHTCRAFT
+};
+
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
@@ -43,6 +52,8 @@ pub mod window_place;
 mod tests;
 #[cfg(test)]
 use tests::panels as tests_panels;
+#[cfg(test)]
+use tests::{fixtures as tests_fixtures, render_fixtures as tests_render_fixtures};
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -191,6 +202,10 @@ pub struct LightcraftApp {
     slideshow_auto_paused: bool,
     /// Files dropped since the last UI pass, consumed exactly once by the UI phase.
     dropped_files: Vec<egui::DroppedFileHandle>,
+    /// Prefix of `dropped_files` that arrived behind a prompt, library window or its picker.
+    /// Preserve only this prefix through subsequent dialogs/imports; later arrivals still take
+    /// the ordinary refusal path unless they too arrive while the original barrier is up.
+    deferred_dropped_file_count: usize,
     /// A synthetic batch was injected into a pass and has not been consumed by a completed
     /// (nondiscarded) UI pass yet: a hidden logic tick must not inject another one.
     synthetic_in_flight: bool,
