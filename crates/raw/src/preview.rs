@@ -16,12 +16,13 @@ pub enum PreviewColorSpace {
 
 /// The colour space the raw says its embedded JPEG is in, for a JPEG that declares none itself (no ICC profile,
 /// no EXIF), first available first: the Nikon maker-note ColorSpace (0x001e: 1 = sRGB, 2 = Adobe RGB, per Nikon
-/// tag documentation); the raw's own EXIF ColorSpace (0xA001: 1 = sRGB), or Uncalibrated (0xFFFF) with the
-/// Interoperability IFD's InteropIndex "R03", the DCF option file for Adobe RGB (as a Sony body shot in Adobe RGB
-/// writes, issue #778; per the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
+/// tag documentation); for a Canon CR2 or CR3, the Canon maker-note ColorSpace (0x00b4: 1 = sRGB, 2 = Adobe RGB);
+/// the raw's own EXIF ColorSpace (0xA001: 1 = sRGB), or Uncalibrated (0xFFFF) with the Interoperability IFD's
+/// InteropIndex "R03", the DCF option file for Adobe RGB (as a Sony body shot in Adobe RGB writes, issue #778; per
+/// the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
 /// declaration takes precedence.
 pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
-    let tiff = Tiff::parse(bytes).ok()?;
+    let Ok(tiff) = Tiff::parse(bytes) else { return cr3_color_space(bytes) };
     let make = tiff.ifds.first()?.string(t::MAKE).unwrap_or_default();
     let exif = tiff.exif()?;
     if make.to_ascii_uppercase().starts_with("NIKON")
@@ -33,9 +34,39 @@ pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
     if tiff.ifds.first()?.contains(t::DNG_VERSION) {
         return None;
     }
+    if make.to_ascii_uppercase().starts_with("CANON")
+        && let Some(e) = exif.get(t::MAKER_NOTE)
+        && let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)
+        && let Some(space) = canon_color_space(&mn.ifd)
+    {
+        return Some(space);
+    }
     match exif.u16(0xA001)? {
         1 => Some(PreviewColorSpace::Srgb),
         0xFFFF if exif.interop.as_deref()?.bytes(0x0001)?.starts_with(b"R03") => Some(PreviewColorSpace::AdobeRgb),
+        _ => None,
+    }
+}
+
+/// A CR3 keeps its EXIF and maker note in `CMT2`/`CMT3` TIFF blocks and its JPEGs carry no EXIF; a body shot in
+/// Adobe RGB writes ColorSpace Uncalibrated (0xFFFF) with no Interoperability IFD (issue #2654), so the Canon
+/// maker note says which, else an EXIF ColorSpace of sRGB is taken.
+fn cr3_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
+    let cr3 = lightcraft_meta::cr3::parse_cr3(bytes)?;
+    let first = |i: usize| cr3.cmt[i].and_then(|b| Tiff::parse(b).ok()).and_then(|t| t.ifds.into_iter().next());
+    if let Some(space) = first(2).and_then(|mn| canon_color_space(&mn)) {
+        return Some(space);
+    }
+    (first(1)?.u16(0xA001)? == 1).then_some(PreviewColorSpace::Srgb)
+}
+
+/// The Canon maker-note ColorSpace (0x00b4: 1 = sRGB, 2 = Adobe RGB, per ExifTool's published Canon tag names).
+/// A Canon body shot in Adobe RGB writes EXIF ColorSpace Uncalibrated (0xFFFF) with InteropIndex "R98" in a CR2
+/// and no Interoperability IFD in a CR3, so the EXIF alone does not say Adobe RGB (issue #2654).
+fn canon_color_space(note: &Ifd) -> Option<PreviewColorSpace> {
+    match note.u16(0x00b4)? {
+        1 => Some(PreviewColorSpace::Srgb),
+        2 => Some(PreviewColorSpace::AdobeRgb),
         _ => None,
     }
 }
@@ -324,7 +355,13 @@ fn walk_jpeg(b: &[u8], i: &mut usize) -> Option<(usize, u8)> {
         if m == 0xda {
             // entropy-coded data up to the next marker that is not a stuffed 0xff or a restart
             loop {
-                *i += b.get(*i..)?.iter().position(|&x| x == 0xff)?;
+                let Some(p) = b.get(*i..)?.iter().position(|&x| x == 0xff) else {
+                    // the terminal search examined the rest of the slice: charge it before failing,
+                    // or a crafted file can repeat full-file searches while the budget stays positive
+                    *i = b.len();
+                    return None;
+                };
+                *i += p;
                 match *b.get(*i + 1)? {
                     0x00 | 0xd0..=0xd7 => *i += 2,
                     0xff => *i += 1,
@@ -348,9 +385,29 @@ fn walk_jpeg(b: &[u8], i: &mut usize) -> Option<(usize, u8)> {
 /// share a budget of eight times the file's size, so the scan stays linear (a real file's candidates
 /// fail within a few bytes, or are the preview itself).
 fn scan_for_jpeg(data: &[u8]) -> Option<Vec<u8>> {
+    scan_with_budget(data, scan_budget(data.len())).0
+}
+
+/// The walks' shared budget: eight times the file's size, at least 1 MiB (a tiny file still gets a
+/// useful allowance), saturating so a hostile length cannot wrap it.
+fn scan_budget(len: usize) -> usize {
+    len.saturating_mul(8).max(1 << 20)
+}
+
+/// [`scan_for_jpeg`] with the walks' shared budget passed in, returning the walks' charged extent:
+/// `(preview, bytes charged)`. The counter records the work each walk did whether or not budget
+/// remains, so it stays a measure of work rather than of `budget - left`; a last walk may overshoot
+/// the remaining budget by its own reach. It is a conservative charged-work measure, not literally
+/// the bytes read: marker payloads skipped by `*i += len` are charged without being read, and a
+/// failed terminal search is charged to the end of the slice. That over-count is safe for the
+/// budget. It is a `u64` with saturating addition because the unbudgeted worst case is quadratic in
+/// the file size (32-bit `usize` could otherwise overflow), and it costs one addition per
+/// candidate, no allocation.
+fn scan_with_budget(data: &[u8], budget: usize) -> (Option<Vec<u8>>, u64) {
     let mut best: Option<(usize, usize)> = None;
     let mut at = 1;
-    let mut budget = data.len().saturating_mul(8).max(1 << 20);
+    let mut left = budget;
+    let mut walked = 0u64;
     while let Some(off) = data.get(at..).and_then(|s| s.iter().position(|&b| b == 0xd8)) {
         let d8 = at + off;
         at = d8 + 1;
@@ -360,8 +417,10 @@ fn scan_for_jpeg(data: &[u8]) -> Option<Vec<u8>> {
         let start = d8 - 1; // `at` starts at 1, so d8 >= 1
         let mut reach = start;
         let found = jpeg_extent(data, start, &mut reach);
-        budget = budget.saturating_sub(reach.saturating_sub(start));
-        if budget == 0 {
+        let spent = reach.saturating_sub(start);
+        left = left.saturating_sub(spent);
+        walked = walked.saturating_add(spent as u64);
+        if left == 0 {
             break;
         }
         if let Some((end, 3)) = found {
@@ -371,12 +430,14 @@ fn scan_for_jpeg(data: &[u8]) -> Option<Vec<u8>> {
             at = end;
         }
     }
-    let (start, end) = best?;
-    let mut jpeg = data.get(start..end)?.to_vec();
-    if let Some(first) = jpeg.first_mut() {
-        *first = 0xff;
-    }
-    Some(jpeg)
+    let jpeg = best.and_then(|(start, end)| {
+        let mut jpeg = data.get(start..end)?.to_vec();
+        if let Some(first) = jpeg.first_mut() {
+            *first = 0xff;
+        }
+        Some(jpeg)
+    });
+    (jpeg, walked)
 }
 
 /// Canon CR3: the full-size JPEG track (see [`lightcraft_meta::cr3`]), else the `PRVW` / `THMB` boxes.
@@ -408,10 +469,12 @@ fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
             let be32 = |at: usize| bytes.get(at..at + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
             let (Some(size), Some(len)) = (be32(start), be32(start + 20)) else { continue };
             let j = start + 24;
-            if len < 4 || j + len > start + size.max(24) || j + len > bytes.len() {
+            // 32-bit box lengths can wrap `usize` on wasm32: check the sums, then slice with `get`
+            let (Some(end), Some(lim)) = (j.checked_add(len), start.checked_add(size.max(24))) else { continue };
+            if len < 4 || end > lim {
                 continue;
             }
-            let jpeg = &bytes[j..j + len];
+            let Some(jpeg) = bytes.get(j..end) else { continue };
             // One that doesn't fit the budget left is skipped; a smaller one later may still fit.
             if walked + jpeg.len() > CR3_MAX_WALK {
                 continue;
